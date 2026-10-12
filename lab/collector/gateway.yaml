@@ -1,0 +1,262 @@
+# =============================================================================
+# OTel Collector - GATEWAY tier
+# =============================================================================
+# A horizontally-scaled Deployment, not a DaemonSet. This is where everything
+# expensive and everything stateful happens:
+#
+#   - tail sampling          (needs the WHOLE trace, which no agent ever sees)
+#   - PII scrubbing          (one place, not 40 application teams)
+#   - noise filtering        (cost control, centrally governed)
+#   - span -> metrics        (RED for free, from data you already pay for)
+#   - vendor fan-out         (swap backends without touching anything else)
+#
+# SCALING CAVEAT: with more than one replica, spans of a single trace land on
+# different instances and a tail sampler that cannot see a whole trace makes
+# garbage decisions. The fix is the load_balancing exporter with
+# `routing_key: traceID` in front. Phase 7 does exactly that.
+# =============================================================================
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+  pprof:
+    endpoint: 0.0.0.0:1777
+  zpages:
+    endpoint: 0.0.0.0:55679
+  # Backs the PERSISTENT sending queue below. Without this, the queue lives in
+  # memory and a collector restart silently loses everything still in flight.
+  file_storage/queue:
+    directory: /var/lib/otelcol/queue
+    timeout: 1s
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 80
+    spike_limit_percentage: 25
+
+  resource/gateway:
+    attributes:
+      - key: otel.pipeline.tier
+        value: gateway
+        action: upsert
+
+  # ---------------------------------------------------------------- filter --
+  # Cost control, governed centrally. These ASGI protocol spans are real but
+  # useless for debugging - they were visible as noise all the way back in
+  # Phase 0, and they are a meaningful fraction of span volume.
+  #
+  # Note the inversion that catches everyone: the filter processor DROPS what
+  # the condition MATCHES.
+  #
+  # NOTE THE PATH PREFIXES. Recent collector versions require OTTL paths to be
+  # qualified with their context - `span.name`, not bare `name`. An unqualified
+  # path combined with `error_mode: ignore` fails SILENTLY: the processor loads,
+  # the pipeline runs, and nothing is ever filtered. Which is exactly what
+  # happened the first time this config was written.
+  #
+  # When a filter appears to do nothing, set error_mode: propagate temporarily
+  # and the collector will refuse to start with a real parse error.
+  filter/noise:
+    error_mode: ignore
+    traces:
+      span:
+        - 'IsMatch(span.name, ".* http (send|receive)$")'
+        - 'span.attributes["http.target"] == "/health"'
+        - 'span.attributes["http.route"] == "/health"'
+
+  # ------------------------------------------------------------- transform --
+  # OTTL - the OpenTelemetry Transformation Language. This is the modern,
+  # general-purpose way to rewrite telemetry in flight; the older `attributes`
+  # and `metricstransform` processors are narrower special cases.
+  transform/scrub:
+    error_mode: ignore
+    trace_statements:
+      # PII redaction. `orders` deliberately attaches customer.email to its
+      # spans to simulate a developer leaking PII - which, across enough teams,
+      # eventually happens no matter what the policy says. Stripping it HERE
+      # means one reviewed config protects every service, including the ones
+      # written next year by people who never read the policy.
+      - set(span.attributes["customer.email"], "[redacted]") where span.attributes["customer.email"] != nil
+      # Central enrichment: a fact about deployment that no application should
+      # have to know or be redeployed to change.
+      - set(span.attributes["deployment.region"], "eu-west-1")
+    log_statements:
+      - set(log.attributes["customer.email"], "[redacted]") where log.attributes["customer.email"] != nil
+
+  # ---------------------------------------------------------- tail sampling --
+  # The headline feature of a gateway tier.
+  #
+  # HEAD sampling (Phase 1) decides at the root span, before anything is known
+  # about how the request turned out - so at 10% you keep 10% of your errors,
+  # and the trace you need during an incident is probably gone.
+  #
+  # TAIL sampling buffers complete traces for `decision_wait`, then decides
+  # with full knowledge. Policies are OR-ed: a trace is kept if ANY matches.
+  tail_sampling:
+    # How long to hold a trace before deciding. Must exceed your p99 trace
+    # duration or you will decide on incomplete traces. Costs memory:
+    # roughly decision_wait x trace rate x trace size.
+    decision_wait: 5s
+    num_traces: 50000
+    expected_new_traces_per_sec: 50
+    policies:
+      # Never lose a failure. This is the single most valuable policy and the
+      # entire reason tail sampling exists.
+      - name: keep-all-errors
+        type: status_code
+        status_code:
+          status_codes: [ERROR]
+
+      # Never lose a slow request - the other thing you always want to look at.
+      - name: keep-slow
+        type: latency
+        latency:
+          threshold_ms: 300
+
+      # Business-aware sampling: keep everything from the customers who matter
+      # most. Impossible with head sampling, which decides before `customer.tier`
+      # is even known.
+      - name: keep-enterprise
+        type: string_attribute
+        string_attribute:
+          key: customer.tier
+          values: [enterprise]
+
+      # A representative baseline of ordinary successful traffic, so dashboards
+      # and service graphs still reflect normal behaviour.
+      - name: baseline
+        type: probabilistic
+        probabilistic:
+          sampling_percentage: 20
+
+  batch:
+    timeout: 2s
+    send_batch_size: 1024
+    send_batch_max_size: 2048
+
+connectors:
+  # ===========================================================================
+  # Generates RED metrics FROM SPANS. A connector is simultaneously an exporter
+  # of one pipeline and a receiver of another.
+  #
+  # Why this is worth having even though the SDK already emits HTTP metrics:
+  # it is uniform. Every instrumented service gets identical rate/error/
+  # duration metrics with identical names, regardless of language, framework,
+  # or whether anyone remembered to add metrics. For a platform team governing
+  # many teams, that consistency is the product.
+  # ===========================================================================
+  span_metrics:
+    histogram:
+      explicit:
+        buckets: [5ms, 10ms, 25ms, 50ms, 100ms, 250ms, 500ms, 1s, 2s, 5s, 10s]
+    # Every dimension is a metric label, so every dimension multiplies
+    # cardinality. customer.tier has 3 values; customer.id would have had 500.
+    # Phase 2's lesson applies with full force here.
+    dimensions:
+      - name: http.method
+      - name: http.status_code
+      - name: customer.tier
+    exemplars:
+      enabled: true
+      max_per_data_point: 5
+    metrics_flush_interval: 15s
+    namespace: spanmetrics
+
+exporters:
+  otlp/tempo:
+    endpoint: tempo:4317
+    tls:
+      insecure: true
+    sending_queue:
+      enabled: true
+      # PERSISTENT queue: survives a collector restart. Without `storage`, a
+      # restart drops everything still queued, which is exactly when you are
+      # least able to afford losing telemetry.
+      storage: file_storage/queue
+      num_consumers: 4
+      queue_size: 2000
+    retry_on_failure:
+      enabled: true
+      initial_interval: 2s
+      max_interval: 30s
+      max_elapsed_time: 300s
+
+  prometheus:
+    endpoint: 0.0.0.0:9464
+    enable_open_metrics: true
+    metric_expiration: 5m
+
+  otlphttp/loki:
+    endpoint: http://loki:3100/otlp
+    tls:
+      insecure: true
+    sending_queue:
+      enabled: true
+      storage: file_storage/queue
+      queue_size: 2000
+    retry_on_failure:
+      enabled: true
+
+  # Deliberately DECLARED BUT NOT WIRED into any pipeline below - a live
+  # demonstration of the rule from Phase 0: declaring a component does nothing,
+  # only service.pipelines activates it. Add it to a pipeline's exporters list
+  # and restart to see raw data again.
+  debug:
+    verbosity: basic
+
+service:
+  extensions: [health_check, pprof, zpages, file_storage/queue]
+  pipelines:
+    # --- traces that reach Tempo: filtered, scrubbed, TAIL SAMPLED ----------
+    traces/store:
+      receivers: [otlp]
+      processors: [memory_limiter, resource/gateway, filter/noise, transform/scrub, tail_sampling, batch]
+      exporters: [otlp/tempo]
+
+    # --- traces that feed metrics: NOT sampled -----------------------------
+    # Deliberately a separate pipeline off the same receiver. If span_metrics
+    # sat downstream of tail_sampling, your request rate would be the rate of
+    # SAMPLED requests - off by whatever the sampling ratio happens to be, and
+    # silently wrong in a way no dashboard would reveal.
+    traces/metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, filter/noise]
+      exporters: [span_metrics]
+
+    metrics/spanmetrics:
+      receivers: [span_metrics]
+      processors: [batch]
+      exporters: [prometheus]
+
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, resource/gateway, batch]
+      exporters: [prometheus]
+
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, resource/gateway, transform/scrub, batch]
+      exporters: [otlphttp/loki]
+
+  telemetry:
+    logs:
+      level: warn
+    metrics:
+      level: detailed
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: '0.0.0.0'
+                port: 8888
+                without_type_suffix: true
+                without_units: true

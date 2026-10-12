@@ -15,20 +15,25 @@ global:
     cluster: lab
 
 scrape_configs:
-  - job_name: otel-collector
+  # Application metrics + span metrics, re-exposed by the GATEWAY.
+  - job_name: otel-gateway
     static_configs:
-      - targets: ["otel-collector:9464"]
+      - targets: ["otel-gateway:9464"]
     # honor_labels keeps the `job` and `instance` labels the collector derives
     # from each app's service.name / service.instance.id, instead of Prometheus
     # overwriting them with "otel-collector". Without this every metric looks
     # like it came from the collector itself.
     honor_labels: true
 
-  # The collector's own health. Phase 4 leans on this heavily - a dropped-data
-  # collector is an invisible outage unless you watch it.
+  # Both collector tiers' OWN health. A dropped-data collector is an invisible
+  # outage unless you watch it, and with two tiers you need to know WHICH tier
+  # is refusing data - the answer changes what you do about it.
   - job_name: otel-collector-internal
     static_configs:
-      - targets: ["otel-collector:8888"]
+      - targets: ["otel-agent:8888"]
+        labels: { tier: agent }
+      - targets: ["otel-gateway:8888"]
+        labels: { tier: gateway }
 
 rule_files:
   - /etc/prometheus/rules/*.yml

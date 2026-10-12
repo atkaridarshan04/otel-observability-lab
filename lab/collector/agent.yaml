@@ -1,0 +1,126 @@
+# =============================================================================
+# OTel Collector - AGENT tier
+# =============================================================================
+# In production this runs ONE PER HOST (a Kubernetes DaemonSet). Its job is to
+# be close to the application: accept telemetry over localhost, do only cheap
+# work, and get out of the way fast.
+#
+# What belongs here:  receiving, host/resource enrichment, batching
+# What does NOT:      tail sampling, heavy transforms, vendor fan-out
+#
+# The reason is that an agent cannot see a whole trace - it only sees the spans
+# produced on its own host. Any decision needing the complete trace has to
+# happen downstream, at the gateway.
+# =============================================================================
+
+extensions:
+  # Liveness/readiness. In Kubernetes this backs the probes.
+  health_check:
+    endpoint: 0.0.0.0:13133
+  # Live CPU/heap profiles of the collector itself.
+  pprof:
+    endpoint: 0.0.0.0:1777
+  # In-process debug pages: active pipelines, recent spans, queue state.
+  # Visit http://localhost:55680/debug/tracez when something looks wrong.
+  zpages:
+    endpoint: 0.0.0.0:55679
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  # ===========================================================================
+  # ORDER IS SEMANTIC, NOT COSMETIC.
+  #
+  # memory_limiter MUST be first. Its job is to refuse new data when the
+  # process is close to its memory ceiling, and refusing early is the whole
+  # point - a limiter placed after expensive processors has already paid for
+  # the work it is about to throw away.
+  #
+  # batch MUST be last. Batching before a processor that drops data means you
+  # assembled batches you then tear apart.
+  # ===========================================================================
+  memory_limiter:
+    check_interval: 1s
+    # Percentages rather than fixed MiB so the same config works on a laptop
+    # and on a 64GB node. Above `limit`, the collector refuses data and the
+    # refusal shows up as otelcol_receiver_refused_* - which is why that metric
+    # being non-zero is an emergency, not a curiosity.
+    limit_percentage: 75
+    spike_limit_percentage: 20
+
+  # Enrichment that only a process running ON the host can do. The application
+  # does not know its own host name, container id or cloud region - and should
+  # not have to.
+  resource_detection:
+    detectors: [env, system, docker]
+    system:
+      hostname_sources: [os]
+    timeout: 2s
+    override: false
+
+  # Mark which tier handled this. Useful when debugging the pipeline itself.
+  resource/agent:
+    attributes:
+      - key: otel.pipeline.tier
+        value: agent
+        action: upsert
+
+  batch:
+    timeout: 1s
+    send_batch_size: 512
+    send_batch_max_size: 1024
+
+exporters:
+  # Agent -> gateway. Note this is OTLP again: every hop in an OTel pipeline
+  # speaks the same protocol, which is what makes tiers composable at all.
+  otlp/gateway:
+    endpoint: otel-gateway:4317
+    tls:
+      insecure: true
+    # If the gateway is down, hold data here rather than dropping it on the
+    # floor. 'enabled' plus a bounded queue is the minimum responsible setting.
+    sending_queue:
+      enabled: true
+      num_consumers: 4
+      queue_size: 1000
+    retry_on_failure:
+      enabled: true
+      initial_interval: 1s
+      max_interval: 10s
+      max_elapsed_time: 120s
+
+service:
+  extensions: [health_check, pprof, zpages]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resource_detection, resource/agent, batch]
+      exporters: [otlp/gateway]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, resource_detection, resource/agent, batch]
+      exporters: [otlp/gateway]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, resource_detection, resource/agent, batch]
+      exporters: [otlp/gateway]
+
+  telemetry:
+    logs:
+      level: warn
+    metrics:
+      level: detailed
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: '0.0.0.0'
+                port: 8888
+                without_type_suffix: true
+                without_units: true

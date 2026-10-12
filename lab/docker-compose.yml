@@ -1,20 +1,23 @@
 # =============================================================================
-# PHASE 0 stack. Deliberately small.
+# PHASE 4 stack.
 #
-#   postgres, redis          - infrastructure the app depends on
-#   gateway/orders/payments/inventory - the app under observation
-#   loadgen                  - keeps traffic flowing
-#   otel-collector           - receives OTLP and prints it to stdout
+#   postgres, redis                    - infrastructure the app depends on
+#   gateway/orders/payments/inventory  - the app under observation
+#   loadgen                            - keeps traffic flowing
+#   otel-agent                         - collector, agent tier (per host)
+#   otel-gateway                       - collector, gateway tier (scaled)
+#   tempo / prometheus / loki          - one backend per signal
+#   grafana                            - the single investigation surface
 #
-# No Tempo, no Prometheus, no Loki, no Grafana yet. Each arrives in the phase
-# where you hit the problem it solves. Right now the "UI" is `docker compose logs`.
+# Telemetry path: app -> agent -> gateway -> backends. Every hop speaks OTLP,
+# which is what makes the tiers composable.
 # =============================================================================
 
 x-app-env: &app-env
   OTEL_ENABLED: ${OTEL_ENABLED:-false}
   # --- Standard OTel SDK env vars. These are THE config surface for every
   # --- language's SDK, and they are identical on Docker, k8s, or a VM.
-  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-agent:4317
   OTEL_EXPORTER_OTLP_PROTOCOL: grpc
   OTEL_TRACES_EXPORTER: otlp
   OTEL_METRICS_EXPORTER: otlp
@@ -46,7 +49,7 @@ x-app-env: &app-env
 x-app-base: &app-base
   restart: unless-stopped
   depends_on:
-    otel-collector:
+    otel-agent:
       condition: service_started
 
 services:
@@ -76,17 +79,56 @@ services:
     ports: ["6379:6379"]
 
   # ------------------------------------------------------------ collector ----
-  otel-collector:
+  # --- AGENT tier: one per host (a DaemonSet in Kubernetes) ----------------
+  # Close to the app, cheap work only. Apps send here and nowhere else.
+  otel-agent:
     image: otel/opentelemetry-collector-contrib:0.162.0
-    command: ["--config=/etc/otelcol/config.yaml"]
+    command: ["--config=/etc/otelcol/agent.yaml"]
     volumes:
-      - ./collector/config.yaml:/etc/otelcol/config.yaml:ro
+      - ./collector/agent.yaml:/etc/otelcol/agent.yaml:ro
     ports:
-      - "4317:4317"   # OTLP/gRPC
-      - "4318:4318"   # OTLP/HTTP
-      - "9464:9464"   # Prometheus exposition of app metrics
-      - "8888:8888"   # the collector's own internal metrics
-    depends_on: [tempo, loki]
+      - "4317:4317"    # OTLP/gRPC
+      - "4318:4318"    # OTLP/HTTP
+      - "8888:8888"    # its own internal metrics
+      - "13133:13133"  # health_check
+      - "55679:55679"  # zpages
+    depends_on: [otel-gateway]
+    restart: unless-stopped
+
+  # The collector image is distroless and runs as UID 10001, but Docker creates
+  # named volumes root-owned - so the persistent queue fails with "permission
+  # denied" and the gateway refuses to start entirely. Kubernetes solves this
+  # declaratively with securityContext.fsGroup; Compose has no equivalent, so
+  # we chown once before the gateway boots.
+  queue-init:
+    image: alpine:3.21
+    command: ["sh", "-c", "mkdir -p /q && chown -R 10001:10001 /q"]
+    volumes:
+      - gateway-queue:/q
+    restart: "no"
+
+  # --- GATEWAY tier: a scaled Deployment ------------------------------------
+  # Everything expensive and stateful: tail sampling, PII scrubbing, span
+  # metrics, vendor fan-out.
+  otel-gateway:
+    image: otel/opentelemetry-collector-contrib:0.162.0
+    command: ["--config=/etc/otelcol/gateway.yaml"]
+    volumes:
+      - ./collector/gateway.yaml:/etc/otelcol/gateway.yaml:ro
+      - gateway-queue:/var/lib/otelcol/queue
+    ports:
+      - "9464:9464"    # Prometheus exposition of app + span metrics
+      - "8889:8888"    # its own internal metrics (8888 taken by the agent)
+      - "13134:13133"  # health_check
+      - "55680:55679"  # zpages
+      - "1777:1777"    # pprof
+    depends_on:
+      queue-init:
+        condition: service_completed_successfully
+      tempo:
+        condition: service_started
+      loki:
+        condition: service_started
     restart: unless-stopped
 
   # ------------------------------------------------------------- backends ----
@@ -126,7 +168,7 @@ services:
       - prometheus-data:/prometheus
     ports:
       - "9090:9090"
-    depends_on: [otel-collector]
+    depends_on: [otel-gateway]
     restart: unless-stopped
 
   grafana:
@@ -169,7 +211,7 @@ services:
       ORDERS_CARDINALITY_DEMO: ${ORDERS_CARDINALITY_DEMO:-false}
     depends_on:
       postgres: { condition: service_healthy }
-      otel-collector: { condition: service_started }
+      otel-agent: { condition: service_started }
 
   payments:
     <<: *app-base
@@ -194,7 +236,7 @@ services:
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
-      otel-collector: { condition: service_started }
+      otel-agent: { condition: service_started }
 
   loadgen:
     <<: *app-base
@@ -207,6 +249,7 @@ services:
       LOADGEN_RPS: ${LOADGEN_RPS:-5}
 
 volumes:
+  gateway-queue:
   loki-data:
   tempo-data:
   grafana-data:
