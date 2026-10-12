@@ -1,0 +1,128 @@
+# =============================================================================
+# PHASE 0 stack. Deliberately small.
+#
+#   postgres, redis          - infrastructure the app depends on
+#   gateway/orders/payments/inventory - the app under observation
+#   loadgen                  - keeps traffic flowing
+#   otel-collector           - receives OTLP and prints it to stdout
+#
+# No Tempo, no Prometheus, no Loki, no Grafana yet. Each arrives in the phase
+# where you hit the problem it solves. Right now the "UI" is `docker compose logs`.
+# =============================================================================
+
+x-app-env: &app-env
+  OTEL_ENABLED: ${OTEL_ENABLED:-false}
+  # --- Standard OTel SDK env vars. These are THE config surface for every
+  # --- language's SDK, and they are identical on Docker, k8s, or a VM.
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+  OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+  OTEL_TRACES_EXPORTER: otlp
+  OTEL_METRICS_EXPORTER: otlp
+  OTEL_LOGS_EXPORTER: otlp
+  OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED: "true"
+  # Resource attributes describe WHO is emitting. They are attached to every
+  # single span, metric and log from this process. Getting these right is a
+  # DevOps responsibility and it is what makes "which deployment broke?" answerable.
+  OTEL_RESOURCE_ATTRIBUTES: service.namespace=shop,deployment.environment=lab,service.version=0.1.0
+
+x-app-base: &app-base
+  restart: unless-stopped
+  depends_on:
+    otel-collector:
+      condition: service_started
+
+services:
+  # ---------------------------------------------------------------- infra ----
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: otel
+      POSTGRES_PASSWORD: otel
+      POSTGRES_DB: otel
+    volumes:
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U otel"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    ports: ["5432:5432"]
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    ports: ["6379:6379"]
+
+  # ------------------------------------------------------------ collector ----
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.162.0
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./collector/config.yaml:/etc/otelcol/config.yaml:ro
+    ports:
+      - "4317:4317"   # OTLP/gRPC
+      - "4318:4318"   # OTLP/HTTP
+    restart: unless-stopped
+
+  # ------------------------------------------------------------------ app ----
+  gateway:
+    <<: *app-base
+    build: { context: ../app, args: { SERVICE: gateway } }
+    environment:
+      <<: *app-env
+      OTEL_SERVICE_NAME: gateway
+      ORDERS_URL: http://orders:8000
+    ports: ["8080:8000"]
+
+  orders:
+    <<: *app-base
+    build: { context: ../app, args: { SERVICE: orders } }
+    environment:
+      <<: *app-env
+      OTEL_SERVICE_NAME: orders
+      PAYMENTS_URL: http://payments:8000
+      INVENTORY_URL: http://inventory:8000
+      DATABASE_URL: postgresql://otel:otel@postgres:5432/otel
+      ORDERS_POOL_SIZE: ${ORDERS_POOL_SIZE:-10}
+    depends_on:
+      postgres: { condition: service_healthy }
+      otel-collector: { condition: service_started }
+
+  payments:
+    <<: *app-base
+    build: { context: ../app, args: { SERVICE: payments } }
+    environment:
+      <<: *app-env
+      OTEL_SERVICE_NAME: payments
+      PAYMENTS_LATENCY_MS: ${PAYMENTS_LATENCY_MS:-40}
+      PAYMENTS_FAILURE_RATE: ${PAYMENTS_FAILURE_RATE:-0.0}
+      PAYMENTS_DECLINE_RATE: ${PAYMENTS_DECLINE_RATE:-0.02}
+
+  inventory:
+    <<: *app-base
+    build: { context: ../app, args: { SERVICE: inventory } }
+    environment:
+      <<: *app-env
+      OTEL_SERVICE_NAME: inventory
+      DATABASE_URL: postgresql://otel:otel@postgres:5432/otel
+      REDIS_URL: redis://redis:6379/0
+      INVENTORY_POOL_SIZE: ${INVENTORY_POOL_SIZE:-10}
+      INVENTORY_SLOW_QUERY_MS: ${INVENTORY_SLOW_QUERY_MS:-0}
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      otel-collector: { condition: service_started }
+
+  loadgen:
+    <<: *app-base
+    build: { context: ../app, args: { SERVICE: loadgen } }
+    command: ["python", "main.py"]
+    environment:
+      <<: *app-env
+      OTEL_SERVICE_NAME: loadgen
+      GATEWAY_URL: http://gateway:8000
+      LOADGEN_RPS: ${LOADGEN_RPS:-5}
