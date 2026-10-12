@@ -3,14 +3,38 @@
 apiVersion: 1
 
 datasources:
+  - name: Prometheus
+    type: prometheus
+    uid: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    jsonData:
+      httpMethod: POST
+      # THIS is the metrics -> traces link. Prometheus stores an exemplar
+      # alongside a histogram bucket carrying the trace_id of one real request
+      # that landed in it. This tells Grafana: when a user clicks that exemplar
+      # dot on a latency chart, look up `trace_id` in the Tempo datasource.
+      #
+      # Without this block you still have exemplars; they are just a dead end.
+      exemplarTraceIdDestinations:
+        - name: trace_id
+          datasourceUid: tempo
+          urlDisplayLabel: View trace
+
   - name: Tempo
     type: tempo
     uid: tempo
     access: proxy
     url: http://tempo:3200
-    isDefault: true
     jsonData:
       streamingEnabled:
         search: true
-      # Phase 3 adds tracesToLogsV2 here, which is what turns a span into a
-      # one-click jump to that span's log lines.
+      # And the reverse direction: from a trace, show the RED metrics for the
+      # service that produced it.
+      tracesToMetrics:
+        datasourceUid: prometheus
+        tags:
+          - key: service.name
+            value: job
+      # Phase 3 adds tracesToLogsV2 here, completing the triangle.
