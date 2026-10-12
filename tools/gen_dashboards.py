@@ -294,6 +294,55 @@ gold = [
 ]
 dashboard("golden-path", "Golden path — alert to log line", gold, frm="now-1h")
 
+# ---------------------------------------------------------------- 5. SLOs ----
+slo = [
+    row("Error budget — the number that decides whether you ship or fix", 0),
+    stat("Availability budget remaining (6h)", PROM,
+         [("slo:checkout_availability:budget_remaining6h", "")], g(5, 6, 0, 1), "percentunit",
+         "1.0 = untouched, 0 = exhausted, negative = overspent. This is the number that settles 'ship the feature or fix reliability' without anyone having to argue about it.",
+         thresholds=[("red", -10), ("orange", 0.0), ("yellow", 0.25), ("green", 0.5)], decimals=3),
+    stat("Latency budget remaining (1h)", PROM,
+         [("slo:checkout_latency:budget_remaining1h", "")], g(5, 6, 6, 1), "percentunit",
+         "Same idea for the 'under 500ms' objective.",
+         thresholds=[("red", -10), ("orange", 0.0), ("yellow", 0.25), ("green", 0.5)], decimals=3),
+    stat("Burn rate (1h)", PROM, [("slo:checkout_availability:burn_rate1h", "")],
+         g(5, 6, 12, 1), None,
+         "1 = the budget runs out exactly at the end of the period. 14.4 = gone in about two days. This is what the fast-burn page triggers on.",
+         thresholds=[("yellow", 1), ("orange", 6), ("red", 14.4)], decimals=2),
+    stat("Current 5xx ratio (5m)", PROM,
+         [("slo:checkout_availability:error_ratio5m", "")], g(5, 6, 18, 1), "percentunit",
+         "5xx only. 402 card-declined and 403 fraud-rejected are excluded by design.",
+         thresholds=[("yellow", 0.005), ("red", 0.072)], decimals=4),
+
+    row("Why TWO windows — the mechanism, drawn", 6),
+    ts("Error ratio across every window, against the page threshold", PROM,
+       [("slo:checkout_availability:error_ratio1m", "1m (short)"),
+        ("slo:checkout_availability:error_ratio5m", "5m"),
+        ("slo:checkout_availability:error_ratio30m", "30m"),
+        ("slo:checkout_availability:error_ratio1h", "1h (long)"),
+        ("slo:checkout_availability:error_ratio6h", "6h"),
+        ("slo:checkout_availability:budget * 14.4", "page threshold (14.4x)"),
+        ("slo:checkout_availability:budget", "budget (1x burn)")],
+       g(9, 16, 0, 7), "percentunit",
+       "Watch an incident start and end here. The short window spikes and recovers fast; the long window lags. A page needs BOTH above threshold, which is what stops a 30-second blip from waking anyone AND what makes the alert resolve promptly once the incident ends.", decimals=4),
+    ts("Burn rate, 1h vs 6h", PROM,
+       [("slo:checkout_availability:burn_rate1h", "1h burn rate"),
+        ("slo:checkout_availability:burn_rate6h", "6h burn rate")],
+       g(9, 8, 16, 7), None,
+       "Budget consumption expressed as a multiple. Sustained above 1 means the budget will not last the period.", decimals=2),
+
+    row("Alerts", 16),
+    ts("Firing and pending alerts", PROM,
+       [('sum by (alertname, alertstate) (ALERTS)', "{{alertname}} ({{alertstate}})")],
+       g(7, 12, 0, 17), None,
+       "Prometheus exposes its own alert state as the ALERTS series, so alert history is queryable like anything else.", stack=True),
+    logs("Pages and resolutions, as the receiver saw them",
+         '{service_name="alertsink"} | severity_text=~"WARN|ERROR"', g(7, 12, 12, 17),
+         "The alertsink service records every Alertmanager webhook, so the notifications themselves land in Loki alongside everything else."),
+]
+dashboard("slo-overview", "SLO and error budget", slo, frm="now-1h")
+
+
 names = sorted(p.name for p in OUT.glob("*.json"))
 print("generated:")
 for n in names:

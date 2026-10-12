@@ -1,0 +1,639 @@
+{
+  "uid": "slo-overview",
+  "title": "SLO and error budget",
+  "tags": [
+    "lab"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "refresh": "10s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "type": "row",
+      "title": "Error budget \u2014 the number that decides whether you ship or fix",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Availability budget remaining (6h)",
+      "description": "1.0 = untouched, 0 = exhausted, negative = overspent. This is the number that settles 'ship the feature or fix reliability' without anyone having to argue about it.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 0,
+        "y": 1
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 3,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": -10
+              },
+              {
+                "color": "orange",
+                "value": 0.0
+              },
+              {
+                "color": "yellow",
+                "value": 0.25
+              },
+              {
+                "color": "green",
+                "value": 0.5
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "slo:checkout_availability:budget_remaining6h",
+          "legendFormat": "",
+          "editorMode": "code",
+          "range": true,
+          "exemplar": false
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Latency budget remaining (1h)",
+      "description": "Same idea for the 'under 500ms' objective.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 6,
+        "y": 1
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 3,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": -10
+              },
+              {
+                "color": "orange",
+                "value": 0.0
+              },
+              {
+                "color": "yellow",
+                "value": 0.25
+              },
+              {
+                "color": "green",
+                "value": 0.5
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "slo:checkout_latency:budget_remaining1h",
+          "legendFormat": "",
+          "editorMode": "code",
+          "range": true,
+          "exemplar": false
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Burn rate (1h)",
+      "description": "1 = the budget runs out exactly at the end of the period. 14.4 = gone in about two days. This is what the fast-burn page triggers on.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 12,
+        "y": 1
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": null,
+          "decimals": 2,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "orange",
+                "value": 6
+              },
+              {
+                "color": "red",
+                "value": 14.4
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "slo:checkout_availability:burn_rate1h",
+          "legendFormat": "",
+          "editorMode": "code",
+          "range": true,
+          "exemplar": false
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Current 5xx ratio (5m)",
+      "description": "5xx only. 402 card-declined and 403 fraud-rejected are excluded by design.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 18,
+        "y": 1
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 4,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.005
+              },
+              {
+                "color": "red",
+                "value": 0.072
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "slo:checkout_availability:error_ratio5m",
+          "legendFormat": "",
+          "editorMode": "code",
+          "range": true,
+          "exemplar": false
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Why TWO windows \u2014 the mechanism, drawn",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 6
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Error ratio across every window, against the page threshold",
+      "description": "Watch an incident start and end here. The short window spikes and recovers fast; the long window lags. A page needs BOTH above threshold, which is what stops a 30-second blip from waking anyone AND what makes the alert resolve promptly once the incident ends.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 16,
+        "x": 0,
+        "y": 7
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 4,
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "slo:checkout_availability:error_ratio1m",
+          "legendFormat": "1m (short)",
+          "editorMode": "code",
+          "range": true,
+          "exemplar": false
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "slo:checkout_availability:error_ratio5m",
+          "legendFormat": "5m",
+          "editorMode": "code",
+          "range": true,
+          "exemplar": false
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "slo:checkout_availability:error_ratio30m",
+          "legendFormat": "30m",
+          "editorMode": "code",
+          "range": true,
+          "exemplar": false
+        },
+        {
+          "refId": "D",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "slo:checkout_availability:error_ratio1h",
+          "legendFormat": "1h (long)",
+          "editorMode": "code",
+          "range": true,
+          "exemplar": false
+        },
+        {
+          "refId": "E",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "slo:checkout_availability:error_ratio6h",
+          "legendFormat": "6h",
+          "editorMode": "code",
+          "range": true,
+          "exemplar": false
+        },
+        {
+          "refId": "F",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "slo:checkout_availability:budget * 14.4",
+          "legendFormat": "page threshold (14.4x)",
+          "editorMode": "code",
+          "range": true,
+          "exemplar": false
+        },
+        {
+          "refId": "G",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "slo:checkout_availability:budget",
+          "legendFormat": "budget (1x burn)",
+          "editorMode": "code",
+          "range": true,
+          "exemplar": false
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Burn rate, 1h vs 6h",
+      "description": "Budget consumption expressed as a multiple. Sustained above 1 means the budget will not last the period.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 16,
+        "y": 7
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": null,
+          "decimals": 2,
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "slo:checkout_availability:burn_rate1h",
+          "legendFormat": "1h burn rate",
+          "editorMode": "code",
+          "range": true,
+          "exemplar": false
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "slo:checkout_availability:burn_rate6h",
+          "legendFormat": "6h burn rate",
+          "editorMode": "code",
+          "range": true,
+          "exemplar": false
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Alerts",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 16
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Firing and pending alerts",
+      "description": "Prometheus exposes its own alert state as the ALERTS series, so alert history is queryable like anything else.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 17
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": null,
+          "decimals": null,
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 25,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (alertname, alertstate) (ALERTS)",
+          "legendFormat": "{{alertname}} ({{alertstate}})",
+          "editorMode": "code",
+          "range": true,
+          "exemplar": false
+        }
+      ]
+    },
+    {
+      "type": "logs",
+      "title": "Pages and resolutions, as the receiver saw them",
+      "description": "The alertsink service records every Alertmanager webhook, so the notifications themselves land in Loki alongside everything else.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 17
+      },
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": true,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "{service_name=\"alertsink\"} | severity_text=~\"WARN|ERROR\"",
+          "queryType": "range",
+          "editorMode": "code"
+        }
+      ]
+    }
+  ],
+  "templating": {
+    "list": []
+  }
+}
