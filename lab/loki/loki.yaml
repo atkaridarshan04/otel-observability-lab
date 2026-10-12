@@ -1,0 +1,77 @@
+# Loki 3.x, single-binary. Adapted from the official loki-local-config.yaml.
+
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+  grpc_listen_port: 9096
+  log_level: warn
+
+common:
+  instance_addr: 127.0.0.1
+  path_prefix: /loki
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+
+schema_config:
+  configs:
+    - from: 2020-10-24
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+query_range:
+  results_cache:
+    cache:
+      embedded_cache:
+        enabled: true
+        max_size_mb: 100
+
+limits_config:
+  metric_aggregation_enabled: true
+  retention_period: 72h
+  # ==========================================================================
+  # Loki has a cardinality problem shaped exactly like Prometheus's.
+  #
+  # An index LABEL in Loki defines a *stream*. Every unique label combination
+  # is a separate stream with its own index entry and its own chunks. High
+  # cardinality labels are just as ruinous here as they are in Prometheus.
+  #
+  # Out of the box Loki promotes 17 OTLP resource attributes to index labels,
+  # and one of them is `service.instance.id` - a UUID regenerated on every
+  # process start. Left alone, every container restart permanently creates a
+  # brand new set of streams. That is a slow-motion outage.
+  #
+  # So: ignore the defaults, promote only the three attributes we actually
+  # query by, and let everything else land as structured metadata - which is
+  # still searchable, just not indexed.
+  # ==========================================================================
+  otlp_config:
+    resource_attributes:
+      ignore_defaults: true
+      attributes_config:
+        - action: index_label
+          attributes:
+            - service.name
+            - service.namespace
+            - deployment.environment
+
+compactor:
+  working_directory: /loki/compactor
+  retention_enabled: true
+  delete_request_store: filesystem
+
+pattern_ingester:
+  enabled: true
+
+analytics:
+  reporting_enabled: false

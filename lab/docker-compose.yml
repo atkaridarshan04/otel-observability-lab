@@ -86,7 +86,7 @@ services:
       - "4318:4318"   # OTLP/HTTP
       - "9464:9464"   # Prometheus exposition of app metrics
       - "8888:8888"   # the collector's own internal metrics
-    depends_on: [tempo]
+    depends_on: [tempo, loki]
     restart: unless-stopped
 
   # ------------------------------------------------------------- backends ----
@@ -98,6 +98,16 @@ services:
       - tempo-data:/var/tempo
     ports:
       - "3200:3200"   # Tempo HTTP API (query it directly with curl)
+    restart: unless-stopped
+
+  loki:
+    image: grafana/loki:3.7.8
+    command: ["-config.file=/etc/loki/loki.yaml"]
+    volumes:
+      - ./loki/loki.yaml:/etc/loki/loki.yaml:ro
+      - loki-data:/loki
+    ports:
+      - "3100:3100"
     restart: unless-stopped
 
   prometheus:
@@ -133,7 +143,7 @@ services:
       GF_FEATURE_TOGGLES_ENABLE: traceqlEditor
     ports:
       - "3000:3000"
-    depends_on: [tempo, prometheus]
+    depends_on: [tempo, prometheus, loki]
     restart: unless-stopped
 
   # ------------------------------------------------------------------ app ----
@@ -197,6 +207,7 @@ services:
       LOADGEN_RPS: ${LOADGEN_RPS:-5}
 
 volumes:
+  loki-data:
   tempo-data:
   grafana-data:
   prometheus-data:

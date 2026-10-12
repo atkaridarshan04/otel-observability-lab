@@ -1,7 +1,8 @@
 # =============================================================================
-# OpenTelemetry Collector - PHASE 2
+# OpenTelemetry Collector - PHASE 3
 # =============================================================================
-# Changed from Phase 1: metrics now go to Prometheus as well as stdout.
+# Changed from Phase 2: logs now go to Loki as well as stdout. All three
+# signals now have a real backend, and all three carry the same trace_id.
 #
 # Note what did NOT change to add a tracing backend: no application code, no
 # image rebuild, no SDK config. The apps still just send OTLP to the collector
@@ -43,6 +44,14 @@ exporters:
     # Prometheus sees gaps; too long and dead series linger.
     metric_expiration: 5m
 
+  # Loki 3.x ingests OTLP natively at /otlp - there is no Loki-specific
+  # exporter any more, just plain OTLP over HTTP. Older guides reference a
+  # `loki` exporter that has since been removed from the collector.
+  otlphttp/loki:
+    endpoint: http://loki:3100/otlp
+    tls:
+      insecure: true
+
   # Dialled down from `detailed` now that a real UI exists. Flip it back to
   # `detailed` any time you want to read the raw data model again.
   debug:
@@ -61,7 +70,7 @@ service:
     logs:
       receivers: [otlp]
       processors: [batch]
-      exporters: [debug]               # Phase 3 points this at Loki
+      exporters: [otlphttp/loki, debug]
 
   telemetry:
     logs:
