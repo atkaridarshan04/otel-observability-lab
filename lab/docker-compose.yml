@@ -24,6 +24,19 @@ x-app-env: &app-env
   # single span, metric and log from this process. Getting these right is a
   # DevOps responsibility and it is what makes "which deployment broke?" answerable.
   OTEL_RESOURCE_ATTRIBUTES: service.namespace=shop,deployment.environment=lab,service.version=0.1.0
+  # --- Metric temporality. CUMULATIVE means "total since process start";
+  # --- DELTA means "what happened since the last export". Prometheus is a
+  # --- cumulative system, so cumulative passes straight through. Choosing
+  # --- delta here would need a deltatocumulative processor in the collector.
+  OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE: ${OTEL_METRICS_TEMPORALITY:-cumulative}
+  # --- Exemplar filter. trace_based (the default) records an exemplar only
+  # --- when a SAMPLED span is active, which is what links a metric to a trace.
+  OTEL_METRICS_EXEMPLAR_FILTER: ${OTEL_METRICS_EXEMPLAR_FILTER:-trace_based}
+  # --- How often the SDK pushes metrics. The spec default is 60s, which makes
+  # --- a lab feel broken: you change something, see nothing for a minute, and
+  # --- start debugging a pipeline that was fine. 10s here. Leave it at the
+  # --- default in production - this interval costs network and cardinality.
+  OTEL_METRIC_EXPORT_INTERVAL: ${OTEL_METRIC_EXPORT_INTERVAL:-10000}
   # --- Head sampling. Decided in-process, at the ROOT span, before anything is
   # --- known about how the request turns out. Phase 1 exercise: set the sampler
   # --- to parentbased_traceidratio with arg 0.1 and watch what you lose.
@@ -71,6 +84,8 @@ services:
     ports:
       - "4317:4317"   # OTLP/gRPC
       - "4318:4318"   # OTLP/HTTP
+      - "9464:9464"   # Prometheus exposition of app metrics
+      - "8888:8888"   # the collector's own internal metrics
     depends_on: [tempo]
     restart: unless-stopped
 
@@ -85,10 +100,30 @@ services:
       - "3200:3200"   # Tempo HTTP API (query it directly with curl)
     restart: unless-stopped
 
+  prometheus:
+    image: prom/prometheus:v3.15.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-lifecycle
+      # Exemplar storage is STILL behind a feature flag in Prometheus 3.x.
+      # Without it exemplars are silently discarded on ingest and the
+      # metric-to-trace jump just never appears in Grafana.
+      - --enable-feature=exemplar-storage
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/rules:/etc/prometheus/rules:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    depends_on: [otel-collector]
+    restart: unless-stopped
+
   grafana:
     image: grafana/grafana:13.2.3
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
       - grafana-data:/var/lib/grafana
     environment:
       # Lab convenience only. Never do this anywhere real.
@@ -98,7 +133,7 @@ services:
       GF_FEATURE_TOGGLES_ENABLE: traceqlEditor
     ports:
       - "3000:3000"
-    depends_on: [tempo]
+    depends_on: [tempo, prometheus]
     restart: unless-stopped
 
   # ------------------------------------------------------------------ app ----
@@ -121,6 +156,7 @@ services:
       INVENTORY_URL: http://inventory:8000
       DATABASE_URL: postgresql://otel:otel@postgres:5432/otel
       ORDERS_POOL_SIZE: ${ORDERS_POOL_SIZE:-10}
+      ORDERS_CARDINALITY_DEMO: ${ORDERS_CARDINALITY_DEMO:-false}
     depends_on:
       postgres: { condition: service_healthy }
       otel-collector: { condition: service_started }
@@ -163,3 +199,4 @@ services:
 volumes:
   tempo-data:
   grafana-data:
+  prometheus-data:

@@ -1,7 +1,7 @@
 # =============================================================================
-# OpenTelemetry Collector - PHASE 1
+# OpenTelemetry Collector - PHASE 2
 # =============================================================================
-# Changed from Phase 0: traces now go to Tempo as well as stdout.
+# Changed from Phase 1: metrics now go to Prometheus as well as stdout.
 #
 # Note what did NOT change to add a tracing backend: no application code, no
 # image rebuild, no SDK config. The apps still just send OTLP to the collector
@@ -28,6 +28,21 @@ exporters:
     tls:
       insecure: true        # lab-local plaintext. never in production.
 
+  # Re-exposes everything received over OTLP in Prometheus text format, on
+  # :9464/metrics, for Prometheus to scrape. Note the direction change: OTLP is
+  # PUSH (app -> collector), Prometheus is PULL (prometheus -> collector). The
+  # collector is the adapter between the two models.
+  prometheus:
+    endpoint: 0.0.0.0:9464
+    # Exemplars - the pointers from a histogram bucket to a real trace - only
+    # exist in the OpenMetrics exposition format. Without this line you get
+    # metrics, but no way to jump from a latency spike to the trace that caused
+    # it, which is half the reason to run this stack at all.
+    enable_open_metrics: true
+    # How long a metric stays exposed after its last update. Too short and
+    # Prometheus sees gaps; too long and dead series linger.
+    metric_expiration: 5m
+
   # Dialled down from `detailed` now that a real UI exists. Flip it back to
   # `detailed` any time you want to read the raw data model again.
   debug:
@@ -42,7 +57,7 @@ service:
     metrics:
       receivers: [otlp]
       processors: [batch]
-      exporters: [debug]               # Phase 2 points this at Prometheus
+      exporters: [prometheus, debug]
     logs:
       receivers: [otlp]
       processors: [batch]
@@ -51,3 +66,22 @@ service:
   telemetry:
     logs:
       level: info
+    # The collector's OWN metrics. Monitoring the thing that does your
+    # monitoring is not optional: a collector silently dropping data looks
+    # exactly like a quiet system.
+    #
+    # `service.telemetry.metrics.address` was DEPRECATED in collector v0.123.0
+    # and is now ignored. The replacement is this `readers` block. The default
+    # bind is 127.0.0.1:8888, which is unreachable from another container - so
+    # on Docker or Kubernetes you MUST set host explicitly or Prometheus will
+    # scrape nothing and report the target as down.
+    metrics:
+      level: detailed
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: '0.0.0.0'
+                port: 8888
+                without_type_suffix: true
+                without_units: true
