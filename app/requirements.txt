@@ -1,0 +1,20 @@
+# --- application dependencies (plain business code, no observability) ---
+fastapi==0.143.0
+uvicorn[standard]==0.54.0
+httpx==0.28.1
+asyncpg==0.32.0
+redis==8.1.0
+pydantic==2.10.6
+
+# --- OpenTelemetry ---
+# NOTE: OTel Python ships TWO version trains that must stay in lockstep:
+#   stable (api/sdk/exporters)   -> 1.45.x
+#   instrumentation (still beta) -> 0.66bx
+# Mixing trains (e.g. 1.45.1 with 0.60b0) is the #1 cause of "no spans appear".
+opentelemetry-distro==0.66b1
+opentelemetry-exporter-otlp==1.45.1
+opentelemetry-instrumentation-fastapi==0.66b1
+opentelemetry-instrumentation-httpx==0.66b1
+opentelemetry-instrumentation-asyncpg==0.66b1
+opentelemetry-instrumentation-redis==0.66b1
+opentelemetry-instrumentation-logging==0.66b1
