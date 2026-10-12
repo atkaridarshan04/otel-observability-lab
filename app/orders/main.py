@@ -16,13 +16,18 @@ import httpx
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from otelkit import add_event, record_error, set_attrs, traced
+from otelkit import add_event, counter, histogram, record_error, set_attrs, traced, up_down_counter
 
 PAYMENTS_URL = os.getenv("PAYMENTS_URL", "http://payments:8000")
 INVENTORY_URL = os.getenv("INVENTORY_URL", "http://inventory:8000")
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://otel:otel@postgres:5432/otel")
 POOL_SIZE = int(os.getenv("ORDERS_POOL_SIZE", "10"))
 UPSTREAM_TIMEOUT_S = float(os.getenv("ORDERS_UPSTREAM_TIMEOUT_S", "5"))
+
+# When true, business metrics are labelled with customer.id. The loadgen uses
+# 500 distinct customers, so this multiplies every labelled series by ~500.
+# Phase 2 turns this on deliberately to watch the series count explode.
+CARDINALITY_DEMO = os.getenv("ORDERS_CARDINALITY_DEMO", "false").lower() == "true"
 
 PRICE = {
     "SKU-TELESCOPE": 899.00,
@@ -35,7 +40,35 @@ PRICE = {
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("orders")
 
+# --- business metrics -------------------------------------------------------
+# These answer questions the HTTP-level metrics from auto-instrumentation never
+# can. "Is checkout slow?" is an http metric. "Did revenue stop?" is this.
+orders_placed = counter("orders.placed", "Orders successfully placed", "{order}")
+orders_rejected = counter("orders.rejected", "Orders rejected, by reason", "{order}")
+# Unit "{USD}": braces mark an ANNOTATION, not a real unit. OTel's Prometheus
+# translation appends real units to the metric name but drops annotations, so
+# this stays `orders_value` instead of becoming `orders_value_USD`. Using a bare
+# "USD" here is how you end up with orders_value_USD_bucket forever.
+order_value = histogram("orders.value", "Distribution of order value", "{USD}")
+orders_in_flight = up_down_counter("orders.in_flight", "Orders currently in flight", "{order}")
+
 state: dict = {}
+
+
+def order_labels(req: "OrderRequest") -> dict:
+    """Labels for business metrics.
+
+    tier has 3 values and sku has 5, so this is 15 series per metric. Bounded,
+    known in advance, and cheap - that is what a good label set looks like.
+
+    Switching CARDINALITY_DEMO on adds customer.id, which the loadgen draws from
+    a pool of 500. Every labelled metric is then 500x larger, for information
+    that belongs on a span rather than a metric.
+    """
+    labels = {"tier": req.tier, "sku": req.sku}
+    if CARDINALITY_DEMO:
+        labels["customer_id"] = req.customer_id
+    return labels
 
 
 @asynccontextmanager
@@ -92,6 +125,17 @@ async def create_order(req: OrderRequest) -> dict:
     order_id = str(uuid.uuid4())
     amount = round(req.qty * PRICE.get(req.sku, 19.99), 2)
     http = state["http"]
+    labels = order_labels(req)
+    orders_in_flight.add(1, labels)
+    try:
+        return await _create_order(req, order_id, amount, http, labels)
+    finally:
+        # An UpDownCounter that is only ever incremented is a memory leak with
+        # extra steps. Decrement in `finally` so error paths cannot strand it.
+        orders_in_flight.add(-1, labels)
+
+
+async def _create_order(req: OrderRequest, order_id: str, amount: float, http, labels: dict) -> dict:
 
     # --- the 20% that auto-instrumentation can never supply -----------------
     # The server span already exists and already knows this was POST /orders.
@@ -110,6 +154,7 @@ async def create_order(req: OrderRequest) -> dict:
     score = await fraud_check(req.customer_id, amount, req.tier)
     if score > 0.98:
         add_event("order.rejected", reason="fraud_score", score=round(score, 3))
+        orders_rejected.add(1, {**labels, "reason": "fraud"})
         raise HTTPException(status_code=403, detail="flagged for review")
 
     # Fan-out. Both calls carry the W3C `traceparent` header automatically once
@@ -142,9 +187,11 @@ async def create_order(req: OrderRequest) -> dict:
     # and you would page someone for it. Phase 5 depends on this distinction.
     if charge.status_code == 402:
         add_event("payment.declined", order_id=order_id)
+        orders_rejected.add(1, {**labels, "reason": "card_declined"})
         raise HTTPException(status_code=402, detail="card declined")
     if reserve.status_code == 409:
         add_event("inventory.out_of_stock", sku=req.sku)
+        orders_rejected.add(1, {**labels, "reason": "out_of_stock"})
         raise HTTPException(status_code=409, detail="out of stock")
     if charge.status_code >= 500 or reserve.status_code >= 500:
         failed = "payments" if charge.status_code >= 500 else "inventory"
@@ -159,6 +206,12 @@ async def create_order(req: OrderRequest) -> dict:
             "VALUES ($1, $2, $3, $4, $5, $6)",
             order_id, req.customer_id, req.sku, req.qty, amount, req.tier,
         )
+
+    orders_placed.add(1, labels)
+    # Recorded while the span is still active, so the SDK attaches an exemplar
+    # carrying this request's trace_id. That exemplar is what turns a spike on
+    # the chart into one click to the trace that caused it.
+    order_value.record(amount, labels)
 
     log.info("order placed order_id=%s customer_id=%s amount=%.2f", order_id, req.customer_id, amount)
     return {"order_id": order_id, "status": "placed", "amount_usd": amount, "sku": req.sku}

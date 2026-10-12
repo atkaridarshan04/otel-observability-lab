@@ -15,10 +15,14 @@ import functools
 import inspect
 from typing import Any, Callable
 
-from opentelemetry import trace
+from opentelemetry import metrics, trace
 from opentelemetry.trace import Status, StatusCode
 
 _tracer = trace.get_tracer("otelkit")
+
+# One meter per library, same pattern as tracers. Application code creates its
+# instruments from this.
+meter = metrics.get_meter("otelkit")
 
 
 def set_attrs(**attrs: Any) -> None:
@@ -117,4 +121,48 @@ def traced(name: str | None = None, **static_attrs: Any) -> Callable:
     return decorator
 
 
-__all__ = ["set_attrs", "add_event", "record_error", "traced"]
+# ---------------------------------------------------------------------------
+# Metrics
+# ---------------------------------------------------------------------------
+# There are only four instrument types worth memorising, and picking the wrong
+# one is the most common metrics mistake:
+#
+#   Counter          monotonically increases, never decreases.
+#                    Requests served, orders placed, bytes sent, errors.
+#                    You almost always query it as rate(), never as a raw value.
+#
+#   UpDownCounter    goes up and down. Queue depth, in-flight requests,
+#                    active connections, pool checkouts.
+#
+#   Histogram        records a DISTRIBUTION of values. Latency, payload size,
+#                    order value. Use this whenever you will ever care about a
+#                    percentile - which, for latency, is always.
+#
+#   Gauge            a value sampled at a point in time, where only the latest
+#                    reading matters. Temperature, disk free, current price.
+#                    Usually observed via a callback rather than recorded.
+#
+# The decision rule: if you will ever want a p99, it MUST be a histogram. You
+# cannot compute a percentile from an average, and averaging percentiles across
+# instances produces a number that is not a percentile of anything.
+
+
+def counter(name: str, description: str = "", unit: str = "1"):
+    """A value that only goes up. Query with rate()."""
+    return meter.create_counter(name, unit=unit, description=description)
+
+
+def up_down_counter(name: str, description: str = "", unit: str = "1"):
+    """A value that goes up and down. Query directly, not with rate()."""
+    return meter.create_up_down_counter(name, unit=unit, description=description)
+
+
+def histogram(name: str, description: str = "", unit: str = "ms"):
+    """A distribution. The only instrument from which percentiles are honest."""
+    return meter.create_histogram(name, unit=unit, description=description)
+
+
+__all__ = [
+    "set_attrs", "add_event", "record_error", "traced",
+    "meter", "counter", "up_down_counter", "histogram",
+]
