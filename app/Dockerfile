@@ -9,6 +9,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY run.sh /usr/local/bin/run.sh
 RUN chmod +x /usr/local/bin/run.sh
+# The internal telemetry helper ships into every image. In a real org this would
+# be an internal pip package, not a COPY, but the ownership model is the same:
+# the platform team maintains it, application teams just import it.
+COPY otelkit/ /app/otelkit/
 COPY ${SERVICE}/ /app/
 
 ENTRYPOINT ["/usr/local/bin/run.sh"]

@@ -14,11 +14,13 @@ import redis.asyncio as aioredis
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+from otelkit import add_event, set_attrs
+
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://otel:otel@postgres:5432/otel")
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 POOL_SIZE = int(os.getenv("INVENTORY_POOL_SIZE", "10"))
 SLOW_QUERY_MS = int(os.getenv("INVENTORY_SLOW_QUERY_MS", "0"))  # chaos knob
-CACHE_TTL_S = int(os.getenv("INVENTORY_CACHE_TTL_S", "30"))
+CACHE_TTL_S = int(os.getenv("INVENTORY_CACHE_TTL_S", "10"))
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("inventory")
@@ -61,9 +63,21 @@ async def reserve(req: ReserveRequest) -> dict:
     cache_key = f"stock:{req.sku}"
     cached = await state["cache"].get(cache_key)
 
+    # `cache.hit` is the single highest-value attribute in this whole service.
+    # Hits and misses are two different populations with wildly different
+    # latencies, and any average over both describes neither. In Phase 2 this
+    # becomes the reason to use histograms; in Grafana it is the attribute you
+    # group by to split a bimodal latency distribution into two honest ones.
+    set_attrs(**{
+        "cache.hit": cached is not None,
+        "inventory.sku": req.sku,
+        "inventory.qty_requested": req.qty,
+    })
+
     if cached is not None:
         stock = int(cached)
     else:
+        add_event("cache.miss", key=cache_key)
         if SLOW_QUERY_MS:
             await asyncio.sleep(SLOW_QUERY_MS / 1000)  # chaos: simulate a bad query plan
         async with state["db"].acquire() as conn:
@@ -73,12 +87,19 @@ async def reserve(req: ReserveRequest) -> dict:
         stock = row["stock"]
         await state["cache"].setex(cache_key, CACHE_TTL_S, stock)
 
+    set_attrs(**{"inventory.stock_available": stock})
+
     if stock < req.qty:
         log.warning("out of stock sku=%s requested=%s available=%s", req.sku, req.qty, stock)
         raise HTTPException(status_code=409, detail="out of stock")
 
     async with state["db"].acquire() as conn:
         await conn.execute("UPDATE inventory SET stock = stock - $1 WHERE sku = $2", req.qty, req.sku)
-    await state["cache"].delete(cache_key)
+
+    # Write-THROUGH, not invalidate. An earlier version of this deleted the key
+    # here, which meant every single request was a cache miss and the cache was
+    # decorative. With a short TTL this gives a realistic mix of hits and misses,
+    # which is exactly the bimodal latency distribution Phase 2 needs.
+    await state["cache"].setex(cache_key, CACHE_TTL_S, stock - req.qty)
 
     return {"sku": req.sku, "reserved": req.qty, "remaining": stock - req.qty}

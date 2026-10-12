@@ -7,6 +7,7 @@ parallel children, and the request is only as fast as the slower of the two.
 import asyncio
 import logging
 import os
+import random
 import uuid
 from contextlib import asynccontextmanager
 
@@ -14,6 +15,8 @@ import asyncpg
 import httpx
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+
+from otelkit import add_event, record_error, set_attrs, traced
 
 PAYMENTS_URL = os.getenv("PAYMENTS_URL", "http://payments:8000")
 INVENTORY_URL = os.getenv("INVENTORY_URL", "http://inventory:8000")
@@ -67,11 +70,47 @@ async def health() -> dict:
     return {"status": "ok"}
 
 
+@traced("fraud.check", component="risk")
+async def fraud_check(customer_id: str, amount: float, tier: str) -> float:
+    """Pure business logic. No network call, no database.
+
+    Auto-instrumentation is structurally blind to this function - there is no
+    library to monkey-patch. If it ever becomes the slow part of checkout, the
+    only reason you would ever find out is this decorator.
+    """
+    await asyncio.sleep(random.uniform(0.002, 0.012))
+    # Exponent >1 skews the distribution toward zero, so a 0.98 threshold rejects
+    # ~2% of standard-tier orders and ~1.4% of higher tiers. Keep this rare: a
+    # 20% rejection rate would drown out the failure signals of Phase 6.
+    score = random.random() ** (1.0 if tier == "standard" else 1.4)
+    set_attrs(**{"fraud.score": round(score, 3)})
+    return score
+
+
 @app.post("/orders")
 async def create_order(req: OrderRequest) -> dict:
     order_id = str(uuid.uuid4())
     amount = round(req.qty * PRICE.get(req.sku, 19.99), 2)
     http = state["http"]
+
+    # --- the 20% that auto-instrumentation can never supply -----------------
+    # The server span already exists and already knows this was POST /orders.
+    # These attributes are what let you later ask "are enterprise customers
+    # slow?" or "do high-value orders fail more?" - questions nobody builds a
+    # dashboard for in advance.
+    set_attrs(**{
+        "order.id": order_id,
+        "customer.id": req.customer_id,
+        "customer.tier": req.tier,
+        "order.sku": req.sku,
+        "order.qty": req.qty,
+        "order.value_usd": amount,
+    })
+
+    score = await fraud_check(req.customer_id, amount, req.tier)
+    if score > 0.98:
+        add_event("order.rejected", reason="fraud_score", score=round(score, 3))
+        raise HTTPException(status_code=403, detail="flagged for review")
 
     # Fan-out. Both calls carry the W3C `traceparent` header automatically once
     # auto-instrumentation is on - that header is what stitches four services
@@ -88,14 +127,24 @@ async def create_order(req: OrderRequest) -> dict:
     for name, result in (("payments", charge), ("inventory", reserve)):
         if isinstance(result, httpx.TimeoutException):
             log.error("%s timed out order_id=%s customer_id=%s", name, order_id, req.customer_id)
+            # Without record_error the span stays GREEN even though the request
+            # failed. Tempo, the service graph and every span-derived error
+            # metric would all under-report. This one line is load-bearing.
+            record_error(result, **{"failed.dependency": name})
             raise HTTPException(status_code=504, detail=f"{name} timed out")
         if isinstance(result, Exception):
             log.error("%s call failed order_id=%s err=%s", name, order_id, result)
+            record_error(result, **{"failed.dependency": name})
             raise HTTPException(status_code=502, detail=f"{name} unreachable")
 
+    # Expected business outcomes. Deliberately NOT marked as span errors - if
+    # they were, your error rate would include customers mistyping card numbers
+    # and you would page someone for it. Phase 5 depends on this distinction.
     if charge.status_code == 402:
+        add_event("payment.declined", order_id=order_id)
         raise HTTPException(status_code=402, detail="card declined")
     if reserve.status_code == 409:
+        add_event("inventory.out_of_stock", sku=req.sku)
         raise HTTPException(status_code=409, detail="out of stock")
     if charge.status_code >= 500 or reserve.status_code >= 500:
         failed = "payments" if charge.status_code >= 500 else "inventory"
