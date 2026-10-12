@@ -35,7 +35,7 @@ The application code contains **zero OpenTelemetry imports**. That is deliberate
 | # | Phase | Stack added | Doc |
 |---|---|---|---|
 | 0 | Mental model + lab skeleton | collector -> stdout | [00-mental-model.md](docs/00-mental-model.md) **done** |
-| 1 | Tracing | + Tempo, Grafana | _pending_ |
+| 1 | Tracing | + Tempo, Grafana | [01-tracing.md](docs/01-tracing.md) **done** |
 | 2 | Metrics | + Prometheus | _pending_ |
 | 3 | Logs | + Loki | _pending_ |
 | 4 | The Collector in depth | — | _pending_ |
@@ -68,8 +68,9 @@ Step 2 is the entire argument for auto-instrumentation: a service that emitted n
 ## Layout
 
 ```
-app/            the services. plain business code, no OTel imports.
+app/            the services. business code + a thin layer of business spans.
   run.sh        the OTEL_ENABLED switch - read this file first
+  otelkit/      the internal telemetry helper a platform team would ship
 lab/
   .env          chaos knobs + the observability switch
   docker-compose.yml
@@ -81,16 +82,42 @@ tools/
   waterfall.py  rebuild a trace waterfall from raw collector stdout
 ```
 
+## Where to look
+
+| | |
+|---|---|
+| Grafana | <http://localhost:3000> (anonymous admin, lab only) |
+| Tempo API | <http://localhost:3200> |
+| The app | <http://localhost:8080> |
+
+Some TraceQL to paste into Grafana's Explore:
+
+```traceql
+{ .customer.tier = "enterprise" }
+{ .order.value_usd > 500.0 }
+{ .cache.hit = false }
+{ name = "fraud.check" && .fraud.score > 0.9 }
+```
+
 ## Reading raw OTLP
 
-Before any UI exists, you can still reconstruct what Tempo would show you:
+You can still reconstruct what Tempo shows you from the collector's stdout alone:
 
 ```bash
 cd lab
-docker compose logs otel-collector --since 5m --no-log-prefix | python3 ../tools/waterfall.py
+# waterfall.py needs full attribute output, which Phase 1 dialled down
+sed -i '' 's/verbosity: basic/verbosity: detailed/' collector/config.yaml
+docker compose restart otel-collector
+docker compose logs otel-collector --since 2m --no-log-prefix | python3 ../tools/waterfall.py
 ```
 
 Do this until it stops feeling like magic. Every later UI is just a faster version of this.
+
+**The collector reads its config once, at startup.** Editing the bind-mounted file does nothing until you `docker compose restart otel-collector`. To check what is actually loaded:
+
+```bash
+docker compose logs otel-collector | grep -oE '"otelcol.component.id": "[^"]+"' | sort -u
+```
 
 ## Useful commands
 
