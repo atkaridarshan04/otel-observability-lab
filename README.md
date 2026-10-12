@@ -36,7 +36,7 @@ The application code contains **zero OpenTelemetry imports**. That is deliberate
 |---|---|---|---|
 | 0 | Mental model + lab skeleton | collector -> stdout | [00-mental-model.md](docs/00-mental-model.md) **done** |
 | 1 | Tracing | + Tempo, Grafana | [01-tracing.md](docs/01-tracing.md) **done** |
-| 2 | Metrics | + Prometheus | _pending_ |
+| 2 | Metrics | + Prometheus | [02-metrics.md](docs/02-metrics.md) **done** |
 | 3 | Logs | + Loki | _pending_ |
 | 4 | The Collector in depth | — | _pending_ |
 | 5 | Symptom-based alerting | + Alertmanager | _pending_ |
@@ -86,8 +86,10 @@ tools/
 
 | | |
 |---|---|
-| Grafana | <http://localhost:3000> (anonymous admin, lab only) |
+| Grafana | <http://localhost:3000> (anonymous admin, lab only) — RED overview dashboard |
+| Prometheus | <http://localhost:9090> · [cardinality](http://localhost:9090/tsdb-status) |
 | Tempo API | <http://localhost:3200> |
+| Collector metrics | <http://localhost:9464/metrics> (apps) · <http://localhost:8888/metrics> (itself) |
 | The app | <http://localhost:8080> |
 
 Some TraceQL to paste into Grafana's Explore:
@@ -97,6 +99,16 @@ Some TraceQL to paste into Grafana's Explore:
 { .order.value_usd > 500.0 }
 { .cache.hit = false }
 { name = "fraud.check" && .fraud.score > 0.9 }
+```
+
+Some PromQL for Prometheus or Grafana:
+
+```promql
+sum by (job) (rate(http_server_duration_milliseconds_count[1m]))
+sum by (job) (rate(http_server_duration_milliseconds_count{http_status_code=~"5.."}[1m]))
+histogram_quantile(0.95, sum by (job, le) (rate(http_server_duration_milliseconds_bucket[1m])))
+sum by (tier) (rate(orders_placed_total[1m]))
+topk(10, count by (__name__)({__name__=~".+"}))          # cardinality offenders
 ```
 
 ## Reading raw OTLP
