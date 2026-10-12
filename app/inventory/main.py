@@ -14,7 +14,7 @@ import redis.asyncio as aioredis
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from otelkit import add_event, set_attrs
+from otelkit import add_event, get_logger, set_attrs
 
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://otel:otel@postgres:5432/otel")
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
@@ -22,8 +22,7 @@ POOL_SIZE = int(os.getenv("INVENTORY_POOL_SIZE", "10"))
 SLOW_QUERY_MS = int(os.getenv("INVENTORY_SLOW_QUERY_MS", "0"))  # chaos knob
 CACHE_TTL_S = int(os.getenv("INVENTORY_CACHE_TTL_S", "10"))
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
-log = logging.getLogger("inventory")
+log = get_logger("inventory")
 
 state: dict = {}
 
@@ -90,7 +89,7 @@ async def reserve(req: ReserveRequest) -> dict:
     set_attrs(**{"inventory.stock_available": stock})
 
     if stock < req.qty:
-        log.warning("out of stock sku=%s requested=%s available=%s", req.sku, req.qty, stock)
+        log.warning("out of stock", extra={"sku": req.sku, "requested": req.qty, "available": stock})
         raise HTTPException(status_code=409, detail="out of stock")
 
     async with state["db"].acquire() as conn:

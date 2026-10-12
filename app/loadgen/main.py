@@ -6,6 +6,8 @@ import random
 
 import httpx
 
+from otelkit import get_logger
+
 GATEWAY_URL = os.getenv("GATEWAY_URL", "http://gateway:8000")
 RPS = float(os.getenv("LOADGEN_RPS", "5"))
 CONCURRENCY = int(os.getenv("LOADGEN_CONCURRENCY", "10"))
@@ -13,8 +15,7 @@ CONCURRENCY = int(os.getenv("LOADGEN_CONCURRENCY", "10"))
 SKUS = ["SKU-TELESCOPE", "SKU-TRIPOD", "SKU-EYEPIECE", "SKU-FILTER", "SKU-STARMAP"]
 TIERS = ["standard"] * 70 + ["premium"] * 25 + ["enterprise"] * 5
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
-log = logging.getLogger("loadgen")
+log = get_logger("loadgen")
 
 
 async def one_request(client: httpx.AsyncClient) -> None:

@@ -16,7 +16,7 @@ import httpx
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from otelkit import add_event, counter, histogram, record_error, set_attrs, traced, up_down_counter
+from otelkit import add_event, counter, get_logger, histogram, record_error, set_attrs, traced, up_down_counter
 
 PAYMENTS_URL = os.getenv("PAYMENTS_URL", "http://payments:8000")
 INVENTORY_URL = os.getenv("INVENTORY_URL", "http://inventory:8000")
@@ -37,8 +37,7 @@ PRICE = {
     "SKU-STARMAP": 12.00,
 }
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
-log = logging.getLogger("orders")
+log = get_logger("orders")
 
 # --- business metrics -------------------------------------------------------
 # These answer questions the HTTP-level metrics from auto-instrumentation never
@@ -171,14 +170,16 @@ async def _create_order(req: OrderRequest, order_id: str, amount: float, http, l
 
     for name, result in (("payments", charge), ("inventory", reserve)):
         if isinstance(result, httpx.TimeoutException):
-            log.error("%s timed out order_id=%s customer_id=%s", name, order_id, req.customer_id)
+            log.error("upstream timed out", extra={"dependency": name, "order_id": order_id,
+                                                   "customer_id": req.customer_id, "tier": req.tier})
             # Without record_error the span stays GREEN even though the request
             # failed. Tempo, the service graph and every span-derived error
             # metric would all under-report. This one line is load-bearing.
             record_error(result, **{"failed.dependency": name})
             raise HTTPException(status_code=504, detail=f"{name} timed out")
         if isinstance(result, Exception):
-            log.error("%s call failed order_id=%s err=%s", name, order_id, result)
+            log.error("upstream call failed", extra={"dependency": name, "order_id": order_id,
+                                                     "error": str(result)})
             record_error(result, **{"failed.dependency": name})
             raise HTTPException(status_code=502, detail=f"{name} unreachable")
 
@@ -195,7 +196,8 @@ async def _create_order(req: OrderRequest, order_id: str, amount: float, http, l
         raise HTTPException(status_code=409, detail="out of stock")
     if charge.status_code >= 500 or reserve.status_code >= 500:
         failed = "payments" if charge.status_code >= 500 else "inventory"
-        log.error("%s returned 5xx order_id=%s", failed, order_id)
+        log.error("upstream returned 5xx", extra={"dependency": failed, "order_id": order_id,
+                                                      "status": charge.status_code if failed == "payments" else reserve.status_code})
         raise HTTPException(status_code=502, detail=f"{failed} failed")
     if charge.status_code >= 400 or reserve.status_code >= 400:
         raise HTTPException(status_code=400, detail="order rejected")
@@ -213,5 +215,6 @@ async def _create_order(req: OrderRequest, order_id: str, amount: float, http, l
     # the chart into one click to the trace that caused it.
     order_value.record(amount, labels)
 
-    log.info("order placed order_id=%s customer_id=%s amount=%.2f", order_id, req.customer_id, amount)
+    log.info("order placed", extra={"order_id": order_id, "customer_id": req.customer_id,
+                                    "amount_usd": amount, "tier": req.tier, "sku": req.sku})
     return {"order_id": order_id, "status": "placed", "amount_usd": amount, "sku": req.sku}

@@ -10,11 +10,12 @@ import httpx
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+from otelkit import get_logger
+
 ORDERS_URL = os.getenv("ORDERS_URL", "http://orders:8000")
 UPSTREAM_TIMEOUT_S = float(os.getenv("GATEWAY_UPSTREAM_TIMEOUT_S", "10"))
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
-log = logging.getLogger("gateway")
+log = get_logger("gateway")
 
 app = FastAPI(title="gateway")
 client = httpx.AsyncClient(timeout=UPSTREAM_TIMEOUT_S)
@@ -38,14 +39,14 @@ async def checkout(req: CheckoutRequest) -> dict:
         r = await client.post(f"{ORDERS_URL}/orders", json=req.model_dump())
     except httpx.TimeoutException:
         # Classic cascading-failure shape: a slow dependency becomes OUR 504.
-        log.error("orders timed out customer_id=%s sku=%s", req.customer_id, req.sku)
+        log.error("orders timed out", extra={"customer_id": req.customer_id, "sku": req.sku, "tier": req.tier})
         raise HTTPException(status_code=504, detail="orders timed out")
     except httpx.HTTPError as exc:
-        log.error("orders unreachable customer_id=%s err=%s", req.customer_id, exc)
+        log.error("orders unreachable", extra={"customer_id": req.customer_id, "error": str(exc)})
         raise HTTPException(status_code=502, detail="orders unreachable")
 
     if r.status_code >= 500:
-        log.error("orders returned %s customer_id=%s", r.status_code, req.customer_id)
+        log.error("orders returned 5xx", extra={"status": r.status_code, "customer_id": req.customer_id})
         raise HTTPException(status_code=502, detail="orders failed")
     if r.status_code >= 400:
         # 402 card-declined and 409 out-of-stock are EXPECTED outcomes, not incidents.
