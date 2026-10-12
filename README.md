@@ -24,6 +24,10 @@ If a piece of telemetry doesn't help you travel that path, it's cost without val
 loadgen -> gateway -> orders -+-> payments
                               +-> inventory -> postgres
                                             -> redis
+
+telemetry:  apps -> otel-agent -> otel-gateway -> tempo / prometheus / loki
+                    (per host)    (scaled: tail sampling, PII scrub,
+                                   noise filter, span metrics)
 ```
 
 Four small Python services, about 120 lines each — small enough to read in full, with a topology rich enough to produce every trace shape you'll meet in production: a fan-out, a database, a cache, and a real failure surface.
@@ -38,7 +42,7 @@ The application code contains **zero OpenTelemetry imports**. That is deliberate
 | 1 | Tracing | + Tempo, Grafana | [01-tracing.md](docs/01-tracing.md) **done** |
 | 2 | Metrics | + Prometheus | [02-metrics.md](docs/02-metrics.md) **done** |
 | 3 | Logs | + Loki | [03-logs.md](docs/03-logs.md) **done** |
-| 4 | The Collector in depth | — | _pending_ |
+| 4 | The Collector in depth | agent + gateway tiers | [04-collector.md](docs/04-collector.md) **done** |
 | 5 | Symptom-based alerting | + Alertmanager | _pending_ |
 | 6 | Break it on purpose | — | _pending_ |
 | 7 | Lift to Kubernetes | kind + OTel Operator | _pending_ |
@@ -75,7 +79,7 @@ app/            the services. business code + a thin layer of business spans.
 lab/
   .env          chaos knobs + the observability switch
   docker-compose.yml
-  collector/    the config we iterate on all course
+  collector/    agent.yaml (per host) + gateway.yaml (scaled)
   postgres/
 docs/           one lesson per phase
 chaos/          Phase 6 failure scenarios
@@ -93,7 +97,9 @@ tools/
 | Prometheus | <http://localhost:9090> · [cardinality](http://localhost:9090/tsdb-status) |
 | Tempo API | <http://localhost:3200> |
 | Loki API | <http://localhost:3100> |
-| Collector metrics | <http://localhost:9464/metrics> (apps) · <http://localhost:8888/metrics> (itself) |
+| Collector (gateway) | <http://localhost:9464/metrics> app+span metrics · <http://localhost:8889/metrics> self |
+| Collector (agent) | <http://localhost:8888/metrics> self · health <http://localhost:13133> |
+| zpages | agent <http://localhost:55679/debug/pipelinez> · gateway <http://localhost:55680/debug/pipelinez> |
 | The app | <http://localhost:8080> |
 
 Some TraceQL to paste into Grafana's Explore:
@@ -113,6 +119,13 @@ sum by (job) (rate(http_server_duration_milliseconds_count{http_status_code=~"5.
 histogram_quantile(0.95, sum by (job, le) (rate(http_server_duration_milliseconds_bucket[1m])))
 sum by (tier) (rate(orders_placed_total[1m]))
 topk(10, count by (__name__)({__name__=~".+"}))          # cardinality offenders
+
+# pipeline integrity — the four numbers that matter
+sum by (tier) (rate(otelcol_receiver_refused_spans[1m]))         # data loss NOW
+sum(rate(otelcol_exporter_send_failed_spans[1m]))
+max(otelcol_exporter_queue_size)
+sum(rate(otelcol_exporter_sent_spans{exporter="otlp/tempo"}[2m]))
+  / sum(rate(otelcol_receiver_accepted_spans{tier="gateway"}[2m]))  # sampling keep-rate
 ```
 
 ## Dashboards
@@ -152,25 +165,31 @@ sum by (service_name) (rate({service_namespace="shop"}[1m]))
 
 You can still reconstruct what Tempo shows you from the collector's stdout alone:
 
+Read it at the **agent**, where data is still unfiltered and unsampled:
+
 ```bash
 cd lab
-# waterfall.py needs full attribute output, which Phase 1 dialled down
-sed -i '' 's/verbosity: basic/verbosity: detailed/' collector/config.yaml
-docker compose restart otel-collector
-docker compose logs otel-collector --since 2m --no-log-prefix | python3 ../tools/waterfall.py
+# add a debug exporter to the agent's traces pipeline, then:
+docker compose restart otel-agent
+docker compose logs otel-agent --since 2m --no-log-prefix | python3 ../tools/waterfall.py
 ```
+
+The gateway declares a `debug` exporter but deliberately leaves it out of every pipeline — a live reminder that declaring a component does nothing; only `service.pipelines` activates it.
 
 Do this until it stops feeling like magic. Every later UI is just a faster version of this.
 
 **Bind-mounted config is read once, at startup.** This applies to the collector *and* Grafana — editing the file does nothing until the container restarts, and `docker compose up -d` will not recreate a container whose compose definition has not changed. Symptom: a new exporter, datasource or dashboard that silently never appears.
 
 ```bash
-docker compose restart otel-collector   # after collector/config.yaml
-docker compose restart grafana          # after provisioning/ or dashboards/
-docker compose restart prometheus       # after prometheus.yml
+docker compose restart otel-agent otel-gateway   # after collector/*.yaml
+docker compose restart grafana                   # after provisioning/ or dashboards/
+docker compose restart prometheus                # after prometheus.yml
 
-# what the collector ACTUALLY loaded:
-docker compose logs otel-collector | grep -oE '"otelcol.component.id": "[^"]+"' | sort -u
+# what a collector ACTUALLY loaded:
+docker compose logs otel-gateway | grep -oE '"otelcol.component.id": "[^"]+"' | sort -u
+
+# exact component IDs available in this build:
+docker run --rm otel/opentelemetry-collector-contrib:0.162.0 components
 ```
 
 ## Useful commands
