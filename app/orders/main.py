@@ -148,6 +148,15 @@ async def _create_order(req: OrderRequest, order_id: str, amount: float, http, l
         "order.sku": req.sku,
         "order.qty": req.qty,
         "order.value_usd": amount,
+        # DELIBERATE PII LEAK. This is what a well-meaning developer adds while
+        # debugging and forgets to remove. Across enough teams it always
+        # happens eventually, whatever the policy says.
+        #
+        # The gateway collector redacts it with an OTTL statement, so one
+        # reviewed config protects every service - including ones written next
+        # year by people who never read the policy. See transform/scrub in
+        # lab/collector/gateway.yaml.
+        "customer.email": f"{req.customer_id}@example.com",
     })
 
     score = await fraud_check(req.customer_id, amount, req.tier)
