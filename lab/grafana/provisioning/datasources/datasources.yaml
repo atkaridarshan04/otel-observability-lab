@@ -1,5 +1,8 @@
 # Provisioned datasources. Checking these into git is the point: nobody should
 # be clicking through a UI to wire up observability, in a lab or in production.
+#
+# The three cross-links below are what turn three separate databases into one
+# investigation surface. Without them you have three tabs and a clipboard.
 apiVersion: 1
 
 datasources:
@@ -11,12 +14,9 @@ datasources:
     isDefault: true
     jsonData:
       httpMethod: POST
-      # THIS is the metrics -> traces link. Prometheus stores an exemplar
-      # alongside a histogram bucket carrying the trace_id of one real request
-      # that landed in it. This tells Grafana: when a user clicks that exemplar
-      # dot on a latency chart, look up `trace_id` in the Tempo datasource.
-      #
-      # Without this block you still have exemplars; they are just a dead end.
+      # METRICS -> TRACES. Prometheus stores an exemplar beside a histogram
+      # bucket carrying the trace_id of one real request that landed in it.
+      # This tells Grafana to resolve that trace_id against Tempo.
       exemplarTraceIdDestinations:
         - name: trace_id
           datasourceUid: tempo
@@ -30,11 +30,40 @@ datasources:
     jsonData:
       streamingEnabled:
         search: true
-      # And the reverse direction: from a trace, show the RED metrics for the
-      # service that produced it.
+      # TRACES -> LOGS. The final edge of the triangle: from any span, jump to
+      # the log lines emitted during that exact request. This is the last step
+      # of the golden path - the one that shows you the actual error text.
+      tracesToLogsV2:
+        datasourceUid: loki
+        spanStartTimeShift: '-2m'
+        spanEndTimeShift: '2m'
+        filterByTraceID: true
+        filterBySpanID: false
+        tags:
+          - key: service.name
+            value: service_name
+      # TRACES -> METRICS. From a trace, see the RED metrics of its service.
       tracesToMetrics:
         datasourceUid: prometheus
         tags:
           - key: service.name
             value: job
-      # Phase 3 adds tracesToLogsV2 here, completing the triangle.
+      serviceMap:
+        datasourceUid: prometheus
+
+  - name: Loki
+    type: loki
+    uid: loki
+    access: proxy
+    url: http://loki:3100
+    jsonData:
+      maxLines: 1000
+      # LOGS -> TRACES. Closing the loop: any log line carrying trace_id gets a
+      # clickable link straight into Tempo.
+      derivedFields:
+        - name: TraceID
+          matcherType: label
+          matcherRegex: trace_id
+          url: '${__value.raw}'
+          datasourceUid: tempo
+          urlDisplayLabel: View trace

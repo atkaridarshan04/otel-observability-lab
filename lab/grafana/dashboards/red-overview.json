@@ -2,8 +2,7 @@
   "uid": "red-overview",
   "title": "RED overview \u2014 shop",
   "tags": [
-    "lab",
-    "red"
+    "lab"
   ],
   "timezone": "browser",
   "schemaVersion": 39,
@@ -11,26 +10,26 @@
   "editable": true,
   "refresh": "10s",
   "time": {
-    "from": "now-15m",
+    "from": "now-30m",
     "to": "now"
   },
   "panels": [
     {
       "type": "row",
       "title": "RED \u2014 the three symptom signals",
+      "collapsed": false,
+      "panels": [],
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
         "y": 0
-      },
-      "collapsed": false,
-      "panels": []
+      }
     },
     {
       "type": "timeseries",
       "title": "Rate \u2014 requests/sec by service",
-      "description": "Traffic. Not a health signal on its own, but every other number is meaningless without it \u2014 a 50% error rate on 2 requests is noise.",
+      "description": "Traffic. Not a health signal alone, but every other number is meaningless without it: a 50% error rate on 2 requests is noise.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -44,10 +43,14 @@
       "fieldConfig": {
         "defaults": {
           "unit": "reqps",
+          "decimals": null,
           "custom": {
             "lineWidth": 2,
             "fillOpacity": 8,
-            "showPoints": "never"
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none"
+            }
           }
         },
         "overrides": []
@@ -75,16 +78,16 @@
           },
           "expr": "sum by (job) (rate(http_server_duration_milliseconds_count[1m]))",
           "legendFormat": "{{job}}",
-          "exemplar": false,
           "editorMode": "code",
-          "range": true
+          "range": true,
+          "exemplar": false
         }
       ]
     },
     {
       "type": "timeseries",
       "title": "Errors \u2014 5xx/sec by service",
-      "description": "ONLY 5xx. 402 card-declined and 403 fraud-rejected are deliberately excluded: they are business outcomes, not incidents. Counting them here is how you end up paging someone because a customer mistyped a card number.",
+      "description": "ONLY 5xx. 402 card-declined and 403 fraud-rejected are business outcomes, not incidents. Counting them pages you because a customer mistyped a card number.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -98,10 +101,14 @@
       "fieldConfig": {
         "defaults": {
           "unit": "reqps",
+          "decimals": null,
           "custom": {
             "lineWidth": 2,
             "fillOpacity": 8,
-            "showPoints": "never"
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none"
+            }
           }
         },
         "overrides": []
@@ -129,16 +136,16 @@
           },
           "expr": "sum by (job) (rate(http_server_duration_milliseconds_count{http_status_code=~\"5..\"}[1m]))",
           "legendFormat": "{{job}} 5xx",
-          "exemplar": false,
           "editorMode": "code",
-          "range": true
+          "range": true,
+          "exemplar": false
         }
       ]
     },
     {
       "type": "timeseries",
       "title": "Duration \u2014 gateway percentiles (click a dot \u2192 trace)",
-      "description": "Percentiles from a histogram, never an average. The dots are EXEMPLARS: each is a real request that landed in that bucket, carrying its trace_id. Click one to jump straight to the trace.",
+      "description": "Percentiles from a histogram, never an average. The dots are EXEMPLARS \u2014 each is a real request carrying its trace_id. Click one to land on that trace.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -152,10 +159,14 @@
       "fieldConfig": {
         "defaults": {
           "unit": "ms",
+          "decimals": null,
           "custom": {
             "lineWidth": 2,
             "fillOpacity": 8,
-            "showPoints": "never"
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none"
+            }
           }
         },
         "overrides": []
@@ -183,9 +194,9 @@
           },
           "expr": "histogram_quantile(0.50, sum by (le) (rate(http_server_duration_milliseconds_bucket{job=\"shop/gateway\"}[1m])))",
           "legendFormat": "p50",
-          "exemplar": true,
           "editorMode": "code",
-          "range": true
+          "range": true,
+          "exemplar": true
         },
         {
           "refId": "B",
@@ -195,9 +206,9 @@
           },
           "expr": "histogram_quantile(0.95, sum by (le) (rate(http_server_duration_milliseconds_bucket{job=\"shop/gateway\"}[1m])))",
           "legendFormat": "p95",
-          "exemplar": true,
           "editorMode": "code",
-          "range": true
+          "range": true,
+          "exemplar": true
         },
         {
           "refId": "C",
@@ -207,28 +218,28 @@
           },
           "expr": "histogram_quantile(0.99, sum by (le) (rate(http_server_duration_milliseconds_bucket{job=\"shop/gateway\"}[1m])))",
           "legendFormat": "p99",
-          "exemplar": true,
           "editorMode": "code",
-          "range": true
+          "range": true,
+          "exemplar": true
         }
       ]
     },
     {
       "type": "row",
-      "title": "Business \u2014 what the HTTP metrics cannot tell you",
+      "title": "Business \u2014 what HTTP metrics cannot tell you",
+      "collapsed": false,
+      "panels": [],
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
         "y": 9
-      },
-      "collapsed": false,
-      "panels": []
+      }
     },
     {
       "type": "timeseries",
       "title": "Orders placed /sec by tier",
-      "description": "'Is checkout up?' is an HTTP question. 'Did revenue stop?' is this one. A deploy that silently rejects every enterprise order keeps HTTP metrics perfectly green.",
+      "description": "'Is checkout up?' is an HTTP question. 'Did revenue stop?' is this one. A deploy that silently rejects every enterprise order leaves HTTP metrics green.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -242,10 +253,14 @@
       "fieldConfig": {
         "defaults": {
           "unit": "reqps",
+          "decimals": null,
           "custom": {
             "lineWidth": 2,
             "fillOpacity": 8,
-            "showPoints": "never"
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none"
+            }
           }
         },
         "overrides": []
@@ -273,16 +288,16 @@
           },
           "expr": "sum by (tier) (rate(orders_placed_total[1m]))",
           "legendFormat": "{{tier}}",
-          "exemplar": false,
           "editorMode": "code",
-          "range": true
+          "range": true,
+          "exemplar": false
         }
       ]
     },
     {
       "type": "timeseries",
       "title": "Rejections /sec by reason",
-      "description": "Split by reason so you can tell a fraud-rule misfire from a payment outage from genuine stockouts. One undifferentiated 'rejected' counter would hide all three.",
+      "description": "Split by reason so a fraud-rule misfire, a payment outage and a genuine stockout are three lines rather than one undifferentiated number.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -296,10 +311,14 @@
       "fieldConfig": {
         "defaults": {
           "unit": "reqps",
+          "decimals": null,
           "custom": {
             "lineWidth": 2,
-            "fillOpacity": 8,
-            "showPoints": "never"
+            "fillOpacity": 25,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "normal"
+            }
           }
         },
         "overrides": []
@@ -327,16 +346,16 @@
           },
           "expr": "sum by (reason) (rate(orders_rejected_total[1m]))",
           "legendFormat": "{{reason}}",
-          "exemplar": false,
           "editorMode": "code",
-          "range": true
+          "range": true,
+          "exemplar": false
         }
       ]
     },
     {
       "type": "timeseries",
-      "title": "Order value \u2014 p50 / p95 (USD)",
-      "description": "A histogram of a non-latency quantity. Instrument types are about the SHAPE of the data, not what it measures.",
+      "title": "Order value \u2014 p50 / p95",
+      "description": "A histogram of a non-latency quantity. Instrument type is about the SHAPE of the data, not what it measures.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -350,10 +369,14 @@
       "fieldConfig": {
         "defaults": {
           "unit": "currencyUSD",
+          "decimals": null,
           "custom": {
             "lineWidth": 2,
             "fillOpacity": 8,
-            "showPoints": "never"
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none"
+            }
           }
         },
         "overrides": []
@@ -381,9 +404,9 @@
           },
           "expr": "histogram_quantile(0.50, sum by (le) (rate(orders_value_bucket[5m])))",
           "legendFormat": "p50",
-          "exemplar": false,
           "editorMode": "code",
-          "range": true
+          "range": true,
+          "exemplar": false
         },
         {
           "refId": "B",
@@ -393,11 +416,120 @@
           },
           "expr": "histogram_quantile(0.95, sum by (le) (rate(orders_value_bucket[5m])))",
           "legendFormat": "p95",
-          "exemplar": false,
           "editorMode": "code",
-          "range": true
+          "range": true,
+          "exemplar": false
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Logs \u2014 the third signal",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 18
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Log lines/sec by service and level",
+      "description": "Log VOLUME is itself a signal. A service that suddenly logs 50x more is usually retrying something.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 16,
+        "x": 0,
+        "y": 19
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "logs/s",
+          "decimals": null,
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 25,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum by (service_name, severity_text) (rate({service_namespace=\"shop\"}[1m]))",
+          "legendFormat": "{{service_name}} {{severity_text}}",
+          "editorMode": "code",
+          "range": true,
+          "queryType": "range"
+        }
+      ]
+    },
+    {
+      "type": "logs",
+      "title": "Live errors and warnings (click a line \u2192 trace)",
+      "description": "Every line carries trace_id, so expanding one gives a direct link into Tempo. This is the last step of the golden path.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 19
+      },
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": true,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "{service_namespace=\"shop\"} | severity_text=~\"ERROR|WARN\"",
+          "queryType": "range",
+          "editorMode": "code"
         }
       ]
     }
-  ]
+  ],
+  "templating": {
+    "list": []
+  }
 }
