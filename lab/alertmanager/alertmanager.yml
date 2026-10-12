@@ -1,0 +1,114 @@
+# =============================================================================
+# ALERTMANAGER
+# =============================================================================
+# Prometheus decides WHETHER an alert is firing. Alertmanager decides what
+# happens next: who hears about it, how many messages they get, and which
+# alerts are suppressed because a more important one already explains them.
+#
+# These are genuinely different jobs, and conflating them is why so many teams
+# have alerting that technically works and is practically ignored.
+# =============================================================================
+
+global:
+  resolve_timeout: 2m
+
+route:
+  # The default leaf. Anything not matched by a child route lands here.
+  receiver: default
+
+  # ---------------------------------------------------------------------------
+  # GROUPING is the single most important anti-noise feature.
+  #
+  # Without it, a failure that trips 40 alerts sends 40 pages. Grouping by
+  # alertname + slo means one notification per distinct problem, with all 40
+  # instances listed inside it.
+  # ---------------------------------------------------------------------------
+  group_by: [alertname, slo]
+
+  # Wait this long after the FIRST alert in a new group before notifying, so
+  # the siblings that are about to fire arrive in the same message.
+  group_wait: 10s
+  # Then wait at least this long before sending an UPDATE for the same group.
+  group_interval: 1m
+  # And this long before re-sending an unchanged, still-firing group. Too short
+  # and you train people to ignore the channel; too long and a real incident
+  # falls off the bottom of someone's screen.
+  repeat_interval: 4h
+
+  routes:
+    # Pages go to the on-call path with a shorter group_wait: when something is
+    # actually broken, 10 seconds of batching is 10 seconds of outage.
+    - matchers: [severity = "page"]
+      receiver: pager
+      group_wait: 5s
+      group_interval: 30s
+      repeat_interval: 1h
+
+    # Tickets are deliberately slow and batched. Nothing here justifies
+    # interrupting a human.
+    - matchers: [severity = "ticket"]
+      receiver: tickets
+      group_wait: 1m
+      group_interval: 10m
+      repeat_interval: 12h
+
+    # Collector problems route to the platform team rather than to whoever owns
+    # the service whose telemetry went missing.
+    - matchers: [component = "collector"]
+      receiver: platform
+      group_wait: 10s
+
+# ---------------------------------------------------------------------------
+# INHIBITION: suppress an alert when a more important one already explains it.
+#
+# This is what stops one incident from producing a wall of notifications that
+# nobody reads to the bottom of.
+# ---------------------------------------------------------------------------
+inhibit_rules:
+  # A fast burn already tells you the budget is going. The slow-burn alert for
+  # the same SLO adds nothing.
+  - source_matchers: [alertname = "CheckoutErrorBudgetBurnFast"]
+    target_matchers: [alertname = "CheckoutErrorBudgetBurnSlow"]
+    equal: [slo]
+
+  # Any page about an SLO suppresses tickets about the same SLO. You are
+  # already looking.
+  - source_matchers: [severity = "page"]
+    target_matchers: [severity = "ticket"]
+    equal: [slo]
+
+  # The important one. If the collector is dropping spans, every SLO number is
+  # computed from incomplete data and the resulting alerts are untrustworthy.
+  # Page about the blindness; suppress the alerts you can no longer believe.
+  - source_matchers: [alertname = "TelemetryDataLoss"]
+    target_matchers: [slo =~ ".+"]
+    equal: []
+
+  # The lab-compressed duplicates say the same thing as the production rules.
+  - source_matchers: [lab = "true"]
+    target_matchers: [window = "6h/30m"]
+    equal: [slo]
+
+receivers:
+  # In a real deployment these would be pagerduty_configs, slack_configs,
+  # opsgenie_configs, msteams_configs. A webhook to a local sink makes the
+  # payload visible, which is the point here.
+  - name: default
+    webhook_configs:
+      - url: http://alertsink:8000/alert/default
+        send_resolved: true
+
+  - name: pager
+    webhook_configs:
+      - url: http://alertsink:8000/alert/pager
+        send_resolved: true
+
+  - name: tickets
+    webhook_configs:
+      - url: http://alertsink:8000/alert/tickets
+        send_resolved: true
+
+  - name: platform
+    webhook_configs:
+      - url: http://alertsink:8000/alert/platform
+        send_resolved: true

@@ -171,6 +171,19 @@ services:
     depends_on: [otel-gateway]
     restart: unless-stopped
 
+  alertmanager:
+    image: prom/alertmanager:v0.34.1
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+      - --web.external-url=http://localhost:9093
+    volumes:
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
+    ports:
+      - "9093:9093"
+    restart: unless-stopped
+
   grafana:
     image: grafana/grafana:13.2.3
     volumes:
@@ -238,6 +251,16 @@ services:
       redis: { condition: service_healthy }
       otel-agent: { condition: service_started }
 
+  # Stands in for PagerDuty/Slack. Receives Alertmanager webhooks and prints
+  # the real payload, so you can see exactly what a page would contain.
+  alertsink:
+    <<: *app-base
+    build: { context: ../app, args: { SERVICE: alertsink } }
+    environment:
+      <<: *app-env
+      OTEL_SERVICE_NAME: alertsink
+    ports: ["8081:8000"]
+
   loadgen:
     <<: *app-base
     build: { context: ../app, args: { SERVICE: loadgen } }
@@ -249,6 +272,7 @@ services:
       LOADGEN_RPS: ${LOADGEN_RPS:-5}
 
 volumes:
+  alertmanager-data:
   gateway-queue:
   loki-data:
   tempo-data:
