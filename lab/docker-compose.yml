@@ -24,6 +24,11 @@ x-app-env: &app-env
   # single span, metric and log from this process. Getting these right is a
   # DevOps responsibility and it is what makes "which deployment broke?" answerable.
   OTEL_RESOURCE_ATTRIBUTES: service.namespace=shop,deployment.environment=lab,service.version=0.1.0
+  # --- Head sampling. Decided in-process, at the ROOT span, before anything is
+  # --- known about how the request turns out. Phase 1 exercise: set the sampler
+  # --- to parentbased_traceidratio with arg 0.1 and watch what you lose.
+  OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-parentbased_always_on}
+  OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-1.0}
 
 x-app-base: &app-base
   restart: unless-stopped
@@ -66,6 +71,34 @@ services:
     ports:
       - "4317:4317"   # OTLP/gRPC
       - "4318:4318"   # OTLP/HTTP
+    depends_on: [tempo]
+    restart: unless-stopped
+
+  # ------------------------------------------------------------- backends ----
+  tempo:
+    image: grafana/tempo:3.1.0
+    command: ["-target=all", "-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./tempo/tempo.yaml:/etc/tempo.yaml:ro
+      - tempo-data:/var/tempo
+    ports:
+      - "3200:3200"   # Tempo HTTP API (query it directly with curl)
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:13.2.3
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana-data:/var/lib/grafana
+    environment:
+      # Lab convenience only. Never do this anywhere real.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_FEATURE_TOGGLES_ENABLE: traceqlEditor
+    ports:
+      - "3000:3000"
+    depends_on: [tempo]
     restart: unless-stopped
 
   # ------------------------------------------------------------------ app ----
@@ -126,3 +159,7 @@ services:
       OTEL_SERVICE_NAME: loadgen
       GATEWAY_URL: http://gateway:8000
       LOADGEN_RPS: ${LOADGEN_RPS:-5}
+
+volumes:
+  tempo-data:
+  grafana-data:

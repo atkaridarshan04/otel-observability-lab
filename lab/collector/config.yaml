@@ -1,15 +1,11 @@
 # =============================================================================
-# OpenTelemetry Collector - PHASE 0
+# OpenTelemetry Collector - PHASE 1
 # =============================================================================
-# Every collector config has the same four-part shape, no matter how big it gets:
+# Changed from Phase 0: traces now go to Tempo as well as stdout.
 #
-#   receivers  - how telemetry GETS IN     (otlp, prometheus, filelog, ...)
-#   processors - what happens IN TRANSIT   (batch, memory_limiter, filter, ...)
-#   exporters  - where telemetry GOES OUT  (debug, otlp, prometheus, loki, ...)
-#   service    - which of the above are actually WIRED TOGETHER into pipelines
-#
-# Declaring a component does nothing. Only `service.pipelines` activates it.
-# That trips up everyone once.
+# Note what did NOT change to add a tracing backend: no application code, no
+# image rebuild, no SDK config. The apps still just send OTLP to the collector
+# and have no idea Tempo exists. That indirection is the collector's main job.
 # =============================================================================
 
 receivers:
@@ -21,34 +17,36 @@ receivers:
         endpoint: 0.0.0.0:4318
 
 processors:
-  # Groups telemetry into batches before export. In production this is the single
-  # biggest efficiency win. Kept short here so output appears while you watch.
   batch:
     timeout: 1s
     send_batch_size: 512
 
 exporters:
-  # Phase 0's whole point: dump the raw OTLP data model to stdout so you can read
-  # what a span/metric/log ACTUALLY is before any UI pretty-prints it for you.
-  # `verbosity: detailed` prints every attribute. Never use this in production -
-  # it will out-log your application by an order of magnitude.
+  # Tempo speaks OTLP natively, so this is just "forward it onward".
+  otlp/tempo:
+    endpoint: tempo:4317
+    tls:
+      insecure: true        # lab-local plaintext. never in production.
+
+  # Dialled down from `detailed` now that a real UI exists. Flip it back to
+  # `detailed` any time you want to read the raw data model again.
   debug:
-    verbosity: detailed
+    verbosity: basic
 
 service:
   pipelines:
     traces:
       receivers: [otlp]
       processors: [batch]
-      exporters: [debug]
+      exporters: [otlp/tempo, debug]   # fan-out: one pipeline, two destinations
     metrics:
       receivers: [otlp]
       processors: [batch]
-      exporters: [debug]
+      exporters: [debug]               # Phase 2 points this at Prometheus
     logs:
       receivers: [otlp]
       processors: [batch]
-      exporters: [debug]
+      exporters: [debug]               # Phase 3 points this at Loki
 
   telemetry:
     logs:

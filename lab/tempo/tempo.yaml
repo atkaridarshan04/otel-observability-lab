@@ -1,0 +1,32 @@
+# Tempo 3.x, single-binary mode (-target=all).
+#
+# Note for anyone who has seen older Tempo configs: 3.x REMOVED the top-level
+# `ingester:` and `compactor:` blocks that every 2.x example has. If you copy a
+# 2.x config into 3.x it fails to start. Verified against the v3.1.0
+# single-binary example.
+
+stream_over_http_enabled: true
+
+server:
+  http_listen_port: 3200
+  log_level: info
+
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+        http:
+          endpoint: 0.0.0.0:4318
+
+storage:
+  trace:
+    backend: local          # a local disk. object storage (S3/GCS) in production.
+    wal:
+      path: /var/tempo/wal
+    local:
+      path: /var/tempo/blocks
+
+usage_report:
+  reporting_enabled: false

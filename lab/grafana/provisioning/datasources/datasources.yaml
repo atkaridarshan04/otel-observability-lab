@@ -1,0 +1,16 @@
+# Provisioned datasources. Checking these into git is the point: nobody should
+# be clicking through a UI to wire up observability, in a lab or in production.
+apiVersion: 1
+
+datasources:
+  - name: Tempo
+    type: tempo
+    uid: tempo
+    access: proxy
+    url: http://tempo:3200
+    isDefault: true
+    jsonData:
+      streamingEnabled:
+        search: true
+      # Phase 3 adds tracesToLogsV2 here, which is what turns a span into a
+      # one-click jump to that span's log lines.
