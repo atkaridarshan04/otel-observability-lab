@@ -16,7 +16,7 @@
   "panels": [
     {
       "type": "row",
-      "title": "Is the collector keeping up?",
+      "title": "Pipeline integrity \u2014 is any telemetry being lost?",
       "collapsed": false,
       "panels": [],
       "gridPos": {
@@ -28,75 +28,16 @@
     },
     {
       "type": "stat",
-      "title": "Spans received/sec",
-      "description": "Spans entering the collector.",
+      "title": "Spans REFUSED/sec (agent)",
+      "description": "memory_limiter pushing back at the agent tier. Anything above zero is silent data loss happening right now.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
       "gridPos": {
         "h": 4,
-        "w": 5,
+        "w": 6,
         "x": 0,
-        "y": 1
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": null,
-          "decimals": 1,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "color": {
-            "mode": "thresholds"
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ]
-        },
-        "colorMode": "value",
-        "graphMode": "area",
-        "textMode": "auto",
-        "justifyMode": "auto"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "sum(rate(otelcol_receiver_accepted_spans[1m]))",
-          "legendFormat": "",
-          "editorMode": "code",
-          "range": true,
-          "exemplar": false
-        }
-      ]
-    },
-    {
-      "type": "stat",
-      "title": "Spans REFUSED/sec",
-      "description": "Data the collector rejected \u2014 usually memory_limiter pushing back. Anything above zero is silent data loss.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 5,
-        "x": 5,
         "y": 1
       },
       "fieldConfig": {
@@ -140,7 +81,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(rate(otelcol_receiver_refused_spans[1m]))",
+          "expr": "sum(rate(otelcol_receiver_refused_spans{tier=\"agent\"}[1m]))",
           "legendFormat": "",
           "editorMode": "code",
           "range": true,
@@ -150,16 +91,146 @@
     },
     {
       "type": "stat",
-      "title": "Export queue size",
-      "description": "A queue that is growing rather than draining means the backend is slower than ingest. The next thing that happens is dropped data.",
+      "title": "Spans REFUSED/sec (gateway)",
+      "description": "Same at the gateway. Gateway refusal is worse: the agent queue will back up behind it.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
       "gridPos": {
         "h": 4,
-        "w": 5,
-        "x": 10,
+        "w": 6,
+        "x": 6,
+        "y": 1
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": null,
+          "decimals": 2,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 0.001
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(rate(otelcol_receiver_refused_spans{tier=\"gateway\"}[1m]))",
+          "legendFormat": "",
+          "editorMode": "code",
+          "range": true,
+          "exemplar": false
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Export FAILURES/sec",
+      "description": "Spans that could not be delivered. With a persistent queue these are retried; without one they are gone.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 1
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": null,
+          "decimals": 2,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.001
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(rate(otelcol_exporter_send_failed_spans[1m]))",
+          "legendFormat": "",
+          "editorMode": "code",
+          "range": true,
+          "exemplar": false
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Max queue depth",
+      "description": "Growing rather than draining means the backend is slower than ingest. Dropped data is what happens next.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
         "y": 1
       },
       "fieldConfig": {
@@ -175,11 +246,11 @@
               },
               {
                 "color": "yellow",
-                "value": 1000
+                "value": 500
               },
               {
                 "color": "red",
-                "value": 5000
+                "value": 2000
               }
             ]
           },
@@ -216,148 +287,30 @@
       ]
     },
     {
-      "type": "stat",
-      "title": "Collector memory (RSS)",
-      "description": "Collector resident memory.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 5,
-        "x": 15,
-        "y": 1
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "bytes",
-          "decimals": 0,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "color": {
-            "mode": "thresholds"
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ]
-        },
-        "colorMode": "value",
-        "graphMode": "area",
-        "textMode": "auto",
-        "justifyMode": "auto"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "max(otelcol_process_memory_rss)",
-          "legendFormat": "",
-          "editorMode": "code",
-          "range": true,
-          "exemplar": false
-        }
-      ]
-    },
-    {
-      "type": "stat",
-      "title": "Uptime",
-      "description": "Resets to zero on restart. A collector that keeps restarting is dropping data every time.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 4,
-        "x": 20,
-        "y": 1
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s",
-          "decimals": 0,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "color": {
-            "mode": "thresholds"
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ]
-        },
-        "colorMode": "value",
-        "graphMode": "area",
-        "textMode": "auto",
-        "justifyMode": "auto"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "max(otelcol_process_uptime)",
-          "legendFormat": "",
-          "editorMode": "code",
-          "range": true,
-          "exemplar": false
-        }
-      ]
-    },
-    {
       "type": "row",
-      "title": "Throughput by signal",
+      "title": "Flow through the two tiers",
       "collapsed": false,
       "panels": [],
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 6
+        "y": 5
       }
     },
     {
       "type": "timeseries",
-      "title": "Received/sec by signal",
-      "description": "Relative volume of the three signals. Logs usually dominate, which is why they are usually the biggest bill.",
+      "title": "Spans/sec received by tier",
+      "description": "app -> agent -> gateway. The gateway should receive roughly what the agent sent; a persistent gap means loss between tiers.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
       "gridPos": {
-        "h": 8,
-        "w": 12,
+        "h": 7,
+        "w": 8,
         "x": 0,
-        "y": 7
+        "y": 6
       },
       "fieldConfig": {
         "defaults": {
@@ -395,32 +348,8 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(rate(otelcol_receiver_accepted_spans[1m]))",
-          "legendFormat": "spans",
-          "editorMode": "code",
-          "range": true,
-          "exemplar": false
-        },
-        {
-          "refId": "B",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "sum(rate(otelcol_receiver_accepted_metric_points[1m]))",
-          "legendFormat": "metric points",
-          "editorMode": "code",
-          "range": true,
-          "exemplar": false
-        },
-        {
-          "refId": "C",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "sum(rate(otelcol_receiver_accepted_log_records[1m]))",
-          "legendFormat": "log records",
+          "expr": "sum by (tier) (rate(otelcol_receiver_accepted_spans[1m]))",
+          "legendFormat": "{{tier}}",
           "editorMode": "code",
           "range": true,
           "exemplar": false
@@ -429,17 +358,17 @@
     },
     {
       "type": "timeseries",
-      "title": "Sent/sec by exporter",
-      "description": "Per destination. Compare with the received panel: a persistent gap is data going missing in the pipeline.",
+      "title": "Spans/sec sent by exporter",
+      "description": "otlp/gateway is the agent's hop. otlp/tempo is what survives tail sampling \u2014 the gap between them IS the sampling.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
       "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 7
+        "h": 7,
+        "w": 8,
+        "x": 8,
+        "y": 6
       },
       "fieldConfig": {
         "defaults": {
@@ -478,31 +407,65 @@
             "uid": "prometheus"
           },
           "expr": "sum by (exporter) (rate(otelcol_exporter_sent_spans[1m]))",
-          "legendFormat": "{{exporter}} spans",
+          "legendFormat": "{{exporter}}",
           "editorMode": "code",
           "range": true,
           "exemplar": false
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Tail sampling \u2014 fraction of spans kept",
+      "description": "Should RISE during an incident: errors and slow traces are always kept, so a healthier system is sampled harder. If this is flat during an outage, your policies are not working.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 16,
+        "y": 6
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 3,
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none"
+            }
+          }
         },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
         {
-          "refId": "B",
+          "refId": "A",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (exporter) (rate(otelcol_exporter_sent_metric_points[1m]))",
-          "legendFormat": "{{exporter}} metrics",
-          "editorMode": "code",
-          "range": true,
-          "exemplar": false
-        },
-        {
-          "refId": "C",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "sum by (exporter) (rate(otelcol_exporter_sent_log_records[1m]))",
-          "legendFormat": "{{exporter}} logs",
+          "expr": "sum(rate(otelcol_exporter_sent_spans{exporter=\"otlp/tempo\"}[2m])) / clamp_min(sum(rate(otelcol_receiver_accepted_spans{tier=\"gateway\"}[2m])), 0.001)",
+          "legendFormat": "kept",
           "editorMode": "code",
           "range": true,
           "exemplar": false
@@ -511,20 +474,20 @@
     },
     {
       "type": "row",
-      "title": "Backends",
+      "title": "Resources and batching",
       "collapsed": false,
       "panels": [],
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 15
+        "y": 13
       }
     },
     {
       "type": "timeseries",
-      "title": "Collector CPU seconds/sec",
-      "description": "Effective cores consumed. The collector is usually CPU-bound on serialisation before it is memory-bound.",
+      "title": "Memory (RSS) by tier",
+      "description": "Tail sampling buffers whole traces for decision_wait, so gateway memory scales with trace rate x decision_wait. This is the number that OOMs.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -533,7 +496,65 @@
         "h": 7,
         "w": 8,
         "x": 0,
-        "y": 16
+        "y": 14
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "decimals": null,
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max by (tier) (otelcol_process_memory_rss)",
+          "legendFormat": "{{tier}}",
+          "editorMode": "code",
+          "range": true,
+          "exemplar": false
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "CPU cores by tier",
+      "description": "Collectors are usually CPU-bound on serialisation before they are memory-bound.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 8,
+        "y": 14
       },
       "fieldConfig": {
         "defaults": {
@@ -571,8 +592,8 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(rate(otelcol_process_cpu_seconds[1m]))",
-          "legendFormat": "cpu cores",
+          "expr": "sum by (tier) (rate(otelcol_process_cpu_seconds[1m]))",
+          "legendFormat": "{{tier}}",
           "editorMode": "code",
           "range": true,
           "exemplar": false
@@ -582,7 +603,7 @@
     {
       "type": "timeseries",
       "title": "Batch send size (spans per batch)",
-      "description": "Batches far below send_batch_size mean the timeout is firing first \u2014 you are paying per-request overhead for small payloads.",
+      "description": "Batches far below send_batch_size mean the timeout is firing first, so you are paying per-request overhead on small payloads.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -590,8 +611,8 @@
       "gridPos": {
         "h": 7,
         "w": 8,
-        "x": 8,
-        "y": 16
+        "x": 16,
+        "y": 14
       },
       "fieldConfig": {
         "defaults": {
@@ -650,22 +671,34 @@
       ]
     },
     {
+      "type": "row",
+      "title": "Span metrics \u2014 RED generated from spans, uniformly, for every service",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 21
+      }
+    },
+    {
       "type": "timeseries",
-      "title": "Heap allocated",
-      "description": "Watch alongside queue size. Memory climbing with a full queue is the classic pre-OOM shape.",
+      "title": "Call rate by service (from span_metrics connector)",
+      "description": "Produced by the collector from spans, not by any SDK. Every instrumented service gets identical RED metrics regardless of language or whether anyone remembered to add them.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
       "gridPos": {
         "h": 7,
-        "w": 8,
-        "x": 16,
-        "y": 16
+        "w": 12,
+        "x": 0,
+        "y": 22
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "bytes",
+          "unit": "reqps",
           "decimals": null,
           "custom": {
             "lineWidth": 2,
@@ -699,11 +732,69 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "max(otelcol_process_runtime_heap_alloc_bytes)",
-          "legendFormat": "heap",
+          "expr": "sum by (service_name) (rate(spanmetrics_calls_total[1m]))",
+          "legendFormat": "{{service_name}}",
           "editorMode": "code",
           "range": true,
           "exemplar": false
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "p95 by service (from span_metrics connector)",
+      "description": "Same latency story as the SDK histograms, derived independently. Useful as a cross-check: if these two disagree, one of them is lying.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 22
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "decimals": null,
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (service_name, le) (rate(spanmetrics_duration_milliseconds_bucket[1m])))",
+          "legendFormat": "{{service_name}}",
+          "editorMode": "code",
+          "range": true,
+          "exemplar": true
         }
       ]
     }
