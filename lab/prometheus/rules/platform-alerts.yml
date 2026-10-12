@@ -1,0 +1,108 @@
+# =============================================================================
+# PLATFORM ALERTS
+# =============================================================================
+# These are CAUSE-based, which the rest of this phase argues against. They earn
+# the exception for one reason: they do not describe a system being unhealthy,
+# they describe YOU BEING BLIND. A collector dropping data produces dashboards
+# that look calm and quiet, which is indistinguishable from a healthy system
+# right up until someone asks why there is no data for the outage.
+#
+# The test for whether a cause-based alert deserves to page: does the symptom
+# alert still work if this is broken? For telemetry loss, the answer is no.
+# =============================================================================
+
+groups:
+  - name: telemetry_integrity
+    rules:
+      - alert: TelemetryDataLoss
+        expr: sum by (tier) (rate(otelcol_receiver_refused_spans[5m])) > 0
+        for: 2m
+        labels:
+          severity: page
+          component: collector
+        annotations:
+          summary: "Collector ({{ $labels.tier }} tier) is refusing spans - telemetry is being lost"
+          description: >-
+            otelcol_receiver_refused_spans is non-zero, which means memory_limiter is
+            pushing back and data is being dropped on the floor right now. Every other
+            alert in this file becomes unreliable while this is firing.
+          runbook: "docs/05-alerting.md#telemetrydataloss"
+          dashboard: "http://localhost:3000/d/pipeline-health"
+
+      - alert: TelemetryExportFailing
+        expr: sum by (exporter) (rate(otelcol_exporter_send_failed_spans[5m])) > 0
+        for: 5m
+        labels:
+          severity: ticket
+          component: collector
+        annotations:
+          summary: "Exporter {{ $labels.exporter }} is failing to deliver spans"
+          description: >-
+            A persistent sending queue will retry, so this is a ticket rather than a page
+            unless the queue also fills. Check the backend first.
+          runbook: "docs/05-alerting.md#telemetryexportfailing"
+          dashboard: "http://localhost:3000/d/pipeline-health"
+
+      - alert: TelemetryQueueFilling
+        expr: max by (exporter) (otelcol_exporter_queue_size) > 1500
+        for: 5m
+        labels:
+          severity: page
+          component: collector
+        annotations:
+          summary: "Exporter queue for {{ $labels.exporter }} is filling ({{ $value }})"
+          description: >-
+            The backend is accepting data more slowly than it arrives. When the queue
+            hits its limit, data is discarded. This is the warning before the loss.
+          runbook: "docs/05-alerting.md#telemetryqueuefilling"
+          dashboard: "http://localhost:3000/d/pipeline-health"
+
+      - alert: CollectorDown
+        expr: up{job="otel-collector-internal"} == 0
+        for: 2m
+        labels:
+          severity: page
+          component: collector
+        annotations:
+          summary: "Collector ({{ $labels.tier }} tier) is not scrapeable"
+          description: "Either the collector is down or Prometheus cannot reach it. Both mean you are flying blind."
+          runbook: "docs/05-alerting.md#collectordown"
+
+      - alert: PrometheusTargetDown
+        expr: up == 0
+        for: 5m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Prometheus target {{ $labels.job }} is down"
+          description: "Scrape target unreachable for 5 minutes."
+
+# =============================================================================
+# DELIBERATELY ABSENT - alerts this lab will NOT define, and why
+# =============================================================================
+#
+#   HighCPU / HighMemory
+#       An efficient service SHOULD use its CPU. These fire constantly when
+#       nothing is wrong and stay silent during outages with a novel cause.
+#       Collect the data - it is how you DIAGNOSE after a page - but do not
+#       page on it.
+#
+#   HighCardDeclineRate (402)
+#       A business outcome. Paging on it means waking someone because customers
+#       mistyped card numbers. Phase 1 kept 402 distinct from 503 precisely so
+#       this choice was available; see slo-recording.yml, which filters on 5xx only.
+#
+#   HighFraudRejectionRate (403)
+#       Same reasoning. It IS worth a ticket - see OrderRejectionSpike - because
+#       a misfiring rule costs real revenue. It is not worth a page.
+#
+#   DiskSpaceLow, PodRestarted, ContainerOOMKilled
+#       Worth a ticket and worth a dashboard. They page only when they cause a
+#       user-visible symptom - at which point the SLO burn alert fires anyway,
+#       and it fires for every cause including the ones nobody predicted.
+#
+#   ServiceXLatencyHigh (per-service, not user-facing)
+#       If `payments` is slow but checkout still meets its SLO, nothing is wrong
+#       from the user's point of view. Page on the symptom; use per-service
+#       latency to find the cause once you are already looking.
+# =============================================================================

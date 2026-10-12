@@ -1,0 +1,177 @@
+# =============================================================================
+# SYMPTOM-BASED ALERTS: multi-window, multi-burn-rate
+# =============================================================================
+# The problem with a naive "error rate > 1%" alert:
+#
+#   Short window  -> fires on a 30-second blip, pages you at 3am for nothing,
+#                    and resolves before you open the laptop.
+#   Long window   -> a total outage takes 30 minutes to page anyone.
+#
+# You cannot fix this by picking a better single window, because the two
+# failures want opposite windows.
+#
+# The multi-window multi-burn-rate pattern (Google SRE Workbook, ch. 5) fixes
+# it with TWO conditions ANDed together:
+#
+#   LONG window  - "this has been going on long enough to be real"
+#   SHORT window - "AND it is still happening right now"
+#
+# The short window is what makes the alert RESOLVE quickly once the incident
+# ends, instead of hanging around for the length of the long window.
+#
+# The burn-rate factors come from how much of the error budget a window would
+# consume at that rate:
+#
+#   factor 14.4 over 1h  = 2%  of a 30-day budget   -> page, fast burn
+#   factor 6    over 6h  = 5%  of a 30-day budget   -> page, slower burn
+#   factor 1    over 3d  = 10% of a 30-day budget   -> ticket, not a page
+# =============================================================================
+
+groups:
+  # ---------------------------------------------------------------------------
+  # PRODUCTION windows. Correct, and deliberately slow to react on purpose.
+  # In a fresh lab these need an hour of data before they mean much.
+  # ---------------------------------------------------------------------------
+  - name: slo_checkout_burn_production
+    rules:
+      - alert: CheckoutErrorBudgetBurnFast
+        expr: |
+          slo:checkout_availability:error_ratio1h > (14.4 * 0.005)
+          and
+          slo:checkout_availability:error_ratio5m > (14.4 * 0.005)
+        for: 2m
+        labels:
+          severity: page
+          slo: checkout-availability
+          window: 1h/5m
+        annotations:
+          summary: "Checkout is burning its error budget 14.4x too fast"
+          description: >-
+            {{ $value | humanizePercentage }} of checkout requests are failing with 5xx.
+            At this rate the entire 30-day error budget is gone in about 2 days.
+            This is a user-visible outage.
+          impact: "Users are seeing failed checkouts right now."
+          runbook: "docs/05-alerting.md#checkouterrorbudgetburnfast"
+          dashboard: "http://localhost:3000/d/golden-path"
+
+      - alert: CheckoutErrorBudgetBurnSlow
+        expr: |
+          slo:checkout_availability:error_ratio6h > (6 * 0.005)
+          and
+          slo:checkout_availability:error_ratio30m > (6 * 0.005)
+        for: 15m
+        labels:
+          severity: page
+          slo: checkout-availability
+          window: 6h/30m
+        annotations:
+          summary: "Checkout is burning its error budget 6x too fast"
+          description: >-
+            Sustained elevated error rate: {{ $value | humanizePercentage }} of checkout
+            requests failing over 6 hours. Slower than an outage, but it will exhaust
+            the budget well before the period ends.
+          runbook: "docs/05-alerting.md#checkouterrorbudgetburnslow"
+          dashboard: "http://localhost:3000/d/golden-path"
+
+      - alert: CheckoutLatencyBudgetBurnFast
+        expr: |
+          slo:checkout_latency:bad_ratio1h > (14.4 * 0.01)
+          and
+          slo:checkout_latency:bad_ratio5m > (14.4 * 0.01)
+        for: 2m
+        labels:
+          severity: page
+          slo: checkout-latency
+          window: 1h/5m
+        annotations:
+          summary: "Checkout latency SLO burning 14.4x too fast"
+          description: >-
+            {{ $value | humanizePercentage }} of checkout requests are taking longer
+            than 500ms. Slow enough to be an outage from the user's point of view.
+          runbook: "docs/05-alerting.md#checkoutlatencybudgetburnfast"
+          dashboard: "http://localhost:3000/d/service-detail"
+
+  # ---------------------------------------------------------------------------
+  # LAB-COMPRESSED windows. Identical logic, windows shrunk ~12x so an induced
+  # failure pages within a couple of minutes instead of an hour.
+  #
+  # Do NOT ship these. Short windows are exactly what makes alerts flappy; they
+  # exist here only so a learning session can see the mechanism work.
+  # ---------------------------------------------------------------------------
+  - name: slo_checkout_burn_lab
+    rules:
+      - alert: LabCheckoutErrorBudgetBurnFast
+        expr: |
+          slo:checkout_availability:error_ratio5m > (14.4 * 0.005)
+          and
+          slo:checkout_availability:error_ratio1m > (14.4 * 0.005)
+        for: 30s
+        labels:
+          severity: page
+          slo: checkout-availability
+          window: 5m/1m
+          lab: "true"
+        annotations:
+          summary: "[LAB] Checkout burning error budget 14.4x too fast"
+          description: "{{ $value | humanizePercentage }} of checkout requests failing with 5xx."
+          runbook: "docs/05-alerting.md#checkouterrorbudgetburnfast"
+          dashboard: "http://localhost:3000/d/golden-path"
+
+      - alert: LabCheckoutLatencyBudgetBurnFast
+        expr: |
+          slo:checkout_latency:bad_ratio5m > (14.4 * 0.01)
+          and
+          slo:checkout_latency:bad_ratio1m > (14.4 * 0.01)
+        for: 30s
+        labels:
+          severity: page
+          slo: checkout-latency
+          window: 5m/1m
+          lab: "true"
+        annotations:
+          summary: "[LAB] Checkout latency SLO burning 14.4x too fast"
+          description: "{{ $value | humanizePercentage }} of checkout requests slower than 500ms."
+          runbook: "docs/05-alerting.md#checkoutlatencybudgetburnfast"
+          dashboard: "http://localhost:3000/d/service-detail"
+
+  # ---------------------------------------------------------------------------
+  # BUSINESS symptom. Not derivable from any HTTP metric.
+  #
+  # A deploy that returns a cheerful 200 with an empty body, or rejects every
+  # order for a bad-config reason, leaves every RED dashboard green. This is the
+  # alert that catches it.
+  # ---------------------------------------------------------------------------
+  - name: business_symptoms
+    rules:
+      - alert: OrdersStopped
+        expr: |
+          sum(rate(orders_placed_total[5m])) == 0
+          and
+          sum(rate(http_server_duration_milliseconds_count{job="shop/gateway"}[5m])) > 0.2
+        for: 3m
+        labels:
+          severity: page
+          slo: checkout-availability
+        annotations:
+          summary: "Traffic is flowing but no orders are being placed"
+          description: >-
+            The gateway is serving requests yet orders_placed_total has been flat for
+            3 minutes. Every HTTP dashboard can look perfectly healthy in this state.
+          impact: "Revenue has stopped."
+          runbook: "docs/05-alerting.md#ordersstopped"
+          dashboard: "http://localhost:3000/d/red-overview"
+
+      - alert: OrderRejectionSpike
+        expr: |
+          sum(rate(orders_rejected_total[5m])) / clamp_min(sum(rate(orders_placed_total[5m])) + sum(rate(orders_rejected_total[5m])), 0.001) > 0.25
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "More than 25% of orders are being rejected ({{ $value | humanizePercentage }})"
+          description: >-
+            Rejections are business outcomes, not errors - so this is a TICKET, not a page.
+            But a sustained spike usually means a misfiring fraud rule or a payment
+            provider having a bad day. Check the `reason` label to tell them apart.
+          runbook: "docs/05-alerting.md#orderrejectionspike"
+          dashboard: "http://localhost:3000/d/red-overview"

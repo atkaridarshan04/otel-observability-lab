@@ -1,0 +1,131 @@
+# =============================================================================
+# SLI RECORDING RULES
+# =============================================================================
+# Recording rules precompute expressions on a schedule and store the result as
+# a new series. Three reasons they matter here:
+#
+#   1. Alert rules stay readable. `slo:checkout_availability:error_ratio1h`
+#      says what it means; a nested sum/rate/clamp expression does not.
+#   2. The SAME number feeds the dashboard and the alert. If they are computed
+#      from two hand-written expressions they will eventually disagree, and you
+#      will be debugging a dashboard during an incident.
+#   3. Long-window queries (6h, 3d) get expensive. Precompute once.
+#
+# Naming convention: level:metric:operations
+# =============================================================================
+
+groups:
+  # ---------------------------------------------------------------------------
+  # The SLO targets themselves, recorded as series.
+  #
+  # Putting the objective in the TSDB rather than hard-coding 0.995 in six
+  # places means the dashboard, the alerts and the error-budget calculation all
+  # read the same number, and changing the SLO is a one-line edit.
+  # ---------------------------------------------------------------------------
+  - name: slo_definitions
+    interval: 30s
+    rules:
+      # Checkout availability: 99.5% of requests succeed. Budget = 0.5%.
+      - record: slo:checkout_availability:objective
+        expr: "0.995"
+      - record: slo:checkout_availability:budget
+        expr: "0.005"
+
+      # Checkout latency: 99% of requests complete in under 500ms. Budget = 1%.
+      - record: slo:checkout_latency:objective
+        expr: "0.99"
+      - record: slo:checkout_latency:budget
+        expr: "0.01"
+
+  # ---------------------------------------------------------------------------
+  # Availability SLI: the fraction of checkout requests that FAILED.
+  #
+  # `http_status_code=~"5.."` and nothing else. 402 card-declined and 403
+  # fraud-rejected are excluded on purpose - they are business outcomes, and an
+  # SLI that counts them burns error budget every time a customer mistypes a
+  # card number. This is the Phase 1 instrumentation decision finally cashing in:
+  # the distinction had to exist in the spans before it could exist here.
+  # ---------------------------------------------------------------------------
+  - name: slo_checkout_availability
+    interval: 15s
+    rules:
+      - record: slo:checkout_availability:error_ratio1m
+        expr: |
+          sum(rate(http_server_duration_milliseconds_count{job="shop/gateway",http_status_code=~"5.."}[1m]))
+          / clamp_min(sum(rate(http_server_duration_milliseconds_count{job="shop/gateway"}[1m])), 0.001)
+      - record: slo:checkout_availability:error_ratio5m
+        expr: |
+          sum(rate(http_server_duration_milliseconds_count{job="shop/gateway",http_status_code=~"5.."}[5m]))
+          / clamp_min(sum(rate(http_server_duration_milliseconds_count{job="shop/gateway"}[5m])), 0.001)
+      - record: slo:checkout_availability:error_ratio30m
+        expr: |
+          sum(rate(http_server_duration_milliseconds_count{job="shop/gateway",http_status_code=~"5.."}[30m]))
+          / clamp_min(sum(rate(http_server_duration_milliseconds_count{job="shop/gateway"}[30m])), 0.001)
+      - record: slo:checkout_availability:error_ratio1h
+        expr: |
+          sum(rate(http_server_duration_milliseconds_count{job="shop/gateway",http_status_code=~"5.."}[1h]))
+          / clamp_min(sum(rate(http_server_duration_milliseconds_count{job="shop/gateway"}[1h])), 0.001)
+      - record: slo:checkout_availability:error_ratio6h
+        expr: |
+          sum(rate(http_server_duration_milliseconds_count{job="shop/gateway",http_status_code=~"5.."}[6h]))
+          / clamp_min(sum(rate(http_server_duration_milliseconds_count{job="shop/gateway"}[6h])), 0.001)
+
+      # Burn rate: how many times faster than "just exactly exhausting the
+      # budget over the whole SLO period" we are currently spending.
+      #   burn rate 1   = budget runs out exactly at the end of the period
+      #   burn rate 14.4 = the entire 30-day budget is gone in ~50 hours
+      - record: slo:checkout_availability:burn_rate1h
+        expr: slo:checkout_availability:error_ratio1h / on() slo:checkout_availability:budget
+      - record: slo:checkout_availability:burn_rate6h
+        expr: slo:checkout_availability:error_ratio6h / on() slo:checkout_availability:budget
+
+      # Error budget REMAINING over the observable window, as a fraction.
+      # 1.0 = untouched, 0 = exhausted, negative = overspent.
+      # Production would compute this over the full 30-day SLO period; this lab
+      # has not been running for 30 days, so 6h stands in for it.
+      - record: slo:checkout_availability:budget_remaining6h
+        expr: 1 - (slo:checkout_availability:error_ratio6h / on() slo:checkout_availability:budget)
+
+  # ---------------------------------------------------------------------------
+  # Latency SLI: the fraction of requests SLOWER than the 500ms threshold.
+  #
+  # Computed from histogram BUCKETS, not from a percentile. "99% of requests
+  # under 500ms" is a question a bucket answers exactly; asking it via
+  # histogram_quantile would give an interpolated estimate of a different thing.
+  #
+  # NOTE le="500.0", NOT le="500". Prometheus normalises `le` (and `quantile`)
+  # label values to canonical float form on ingest, so the collector exposes
+  # le="500" and Prometheus stores le="500.0". A selector copied from the
+  # exposition endpoint matches NOTHING, the rule evaluates to an empty vector,
+  # and `health` still reports "ok" - because an empty result is not an error.
+  # Check with: curl -s localhost:9090/api/v1/label/le/values
+  # ---------------------------------------------------------------------------
+  - name: slo_checkout_latency
+    interval: 15s
+    rules:
+      - record: slo:checkout_latency:bad_ratio1m
+        expr: |
+          1 - (
+            sum(rate(http_server_duration_milliseconds_bucket{job="shop/gateway",le="500.0"}[1m]))
+            / clamp_min(sum(rate(http_server_duration_milliseconds_count{job="shop/gateway"}[1m])), 0.001)
+          )
+      - record: slo:checkout_latency:bad_ratio5m
+        expr: |
+          1 - (
+            sum(rate(http_server_duration_milliseconds_bucket{job="shop/gateway",le="500.0"}[5m]))
+            / clamp_min(sum(rate(http_server_duration_milliseconds_count{job="shop/gateway"}[5m])), 0.001)
+          )
+      - record: slo:checkout_latency:bad_ratio30m
+        expr: |
+          1 - (
+            sum(rate(http_server_duration_milliseconds_bucket{job="shop/gateway",le="500.0"}[30m]))
+            / clamp_min(sum(rate(http_server_duration_milliseconds_count{job="shop/gateway"}[30m])), 0.001)
+          )
+      - record: slo:checkout_latency:bad_ratio1h
+        expr: |
+          1 - (
+            sum(rate(http_server_duration_milliseconds_bucket{job="shop/gateway",le="500.0"}[1h]))
+            / clamp_min(sum(rate(http_server_duration_milliseconds_count{job="shop/gateway"}[1h])), 0.001)
+          )
+      - record: slo:checkout_latency:budget_remaining1h
+        expr: 1 - (slo:checkout_latency:bad_ratio1h / on() slo:checkout_latency:budget)
