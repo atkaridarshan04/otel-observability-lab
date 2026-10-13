@@ -70,7 +70,9 @@ So each phase is tagged, and **every tag is a self-consistent snapshot**: the co
 ./tools/phase.sh status   # where am I, what's running
 ```
 
-The script tears down volumes between phases on purpose: stale Tempo or Prometheus data from a later phase would otherwise appear as history that could not exist yet.
+The script tears down volumes between phases on purpose: stale Tempo or Prometheus data from a later phase would otherwise appear as history that could not exist yet. It also stashes your `lab/.env` edits rather than carrying a chaos knob into the next phase, and at `phase-0` it sets `OTEL_ENABLED=false` so the before-and-after flip actually works — the committed value is `true`, because that file was captured after the demo had already been run.
+
+You can run it from any phase; it reinstalls itself after each checkout, so you never need to return to `main` first.
 
 **What each phase adds:**
 
