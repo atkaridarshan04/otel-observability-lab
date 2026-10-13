@@ -38,6 +38,14 @@ if ! git rev-parse --verify --quiet "$REF" >/dev/null; then
   echo "unknown phase or ref: $REF" >&2; exit 1
 fi
 
+# lab/.env is a scratch file — you are MEANT to edit it during a phase, since
+# the chaos knobs live there. Stash those edits so a knob left on from one
+# phase cannot quietly distort the next, and so the checkout below can proceed.
+if ! git diff --quiet -- "$LAB/.env" 2>/dev/null; then
+  git stash push -q -m "phase.sh: lab/.env" -- "$LAB/.env"
+  dim "    stashed your lab/.env edits (recover with: git stash pop)"
+fi
+
 if [[ -n "$(git status --porcelain)" ]]; then
   echo "You have uncommitted changes. Commit, stash, or discard them first:" >&2
   git status --short >&2
@@ -53,6 +61,13 @@ bold "==> checking out $REF"
 git checkout -q "$REF"
 git --no-pager log -1 --format='    %h  %s' HEAD
 
+# Phase 0's lesson IS the flip: run with telemetry off, see nothing, turn it
+# on, see everything. The committed .env has it already ON, because the file
+# was captured after that demo was run — so set the honest starting position.
+if [[ "$REF" == "phase-0" ]]; then
+  sed -i.bak 's/^OTEL_ENABLED=true/OTEL_ENABLED=false/' "$LAB/.env" && rm -f "$LAB/.env.bak"
+fi
+
 bold "==> building and starting"
 docker compose -f "$LAB/docker-compose.yml" up -d --build
 
@@ -66,6 +81,16 @@ if [[ "$REF" == phase-* ]]; then
   DOC=$(ls "$ROOT/docs/" | grep -E "^0${N}-" || true)
   bold "==> read next"
   [[ -n "$DOC" ]] && echo "    docs/$DOC"
+  if [[ "$REF" == "phase-0" ]]; then
+    echo
+    bold "==> OTEL_ENABLED is OFF — this is the 'before' picture"
+    echo "    docker compose -f lab/docker-compose.yml logs -f otel-collector   # silence, by design"
+    echo "    curl -s localhost:8080/health                                     # the app works anyway"
+    echo
+    echo "    Then flip the switch and watch telemetry appear, with no code change:"
+    echo "    sed -i '' 's/OTEL_ENABLED=false/OTEL_ENABLED=true/' lab/.env"
+    echo "    docker compose -f lab/docker-compose.yml up -d --force-recreate"
+  fi
   echo
   dim  "    You are on a detached HEAD. That is fine for reading and running."
   dim  "    To experiment:  git switch -c my-phase-$N"
