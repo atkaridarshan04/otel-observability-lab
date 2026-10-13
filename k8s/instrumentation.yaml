@@ -1,0 +1,80 @@
+# =============================================================================
+# The Instrumentation CRD — one resource, whole-namespace policy.
+#
+# This is what the annotation refers to. Every pod annotated with
+# `instrumentation.opentelemetry.io/inject-python: "true"` gets all of this
+# injected at admission time.
+#
+# ORDER MATTERS: this resource must exist BEFORE the annotated pods start. If
+# a pod is admitted while this is missing, the webhook has nothing to inject
+# and the pod runs with no telemetry — silently, and with no error anywhere.
+# Restarting the Deployment afterwards is the fix.
+#
+# What this replaces from Phase 0–6: every OTEL_* environment variable that was
+# written out by hand in docker-compose.yml, for every service, forever.
+# =============================================================================
+apiVersion: opentelemetry.io/v1alpha1
+kind: Instrumentation
+metadata:
+  name: shop-instrumentation
+  namespace: shop
+spec:
+  exporter:
+    # Points at the agent DaemonSet's Service.
+    #
+    # Production note: a Service load-balances across ALL agent pods, which
+    # defeats the point of a node-local agent. The real pattern uses the
+    # downward API to reach the agent on this pod's own node:
+    #
+    #     env:
+    #       - name: NODE_IP
+    #         valueFrom: { fieldRef: { fieldPath: status.hostIP } }
+    #     exporter:
+    #       endpoint: http://$(NODE_IP):4317
+    #
+    # The Service is used here because it is one less moving part while you are
+    # learning what the Operator does.
+    # NOTE THE PORT. The Operator's default protocol for Python is
+    # http/protobuf, and 4317 is the gRPC port - pointing there produces a
+    # baffling error where the Python HTTP client tries to parse an HTTP/2
+    # gRPC frame as an HTTP/1.1 status line:
+    #
+    #   BadStatusLine('\x00\x00\x06\x04\x00\x00\x00\x00\x00...')
+    #
+    # Either use 4318 (OTLP/HTTP, as here) or set OTEL_EXPORTER_OTLP_PROTOCOL
+    # to grpc. Ports 4317 and 4318 are not interchangeable.
+    endpoint: http://otel-agent-collector.observability.svc.cluster.local:4318
+
+  propagators:
+    - tracecontext     # W3C traceparent — the one that matters
+    - baggage
+
+  sampler:
+    # Head sampling stays OFF. The gateway tail-samples with full knowledge of
+    # how each request turned out, which is strictly better (Phase 4).
+    type: parentbased_always_on
+
+  # Resource attributes applied to every instrumented pod in this namespace.
+  resource:
+    addK8sUIDAttributes: true
+    resourceAttributes:
+      service.namespace: shop
+      deployment.environment: kind
+
+  env:
+    - name: OTEL_METRIC_EXPORT_INTERVAL
+      value: "10000"
+    - name: OTEL_METRICS_EXEMPLAR_FILTER
+      value: trace_based
+    - name: OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE
+      value: cumulative
+
+  python:
+    env:
+      # The Operator injects the SDK onto PYTHONPATH rather than wrapping the
+      # entrypoint, so `opentelemetry-instrument` is never invoked and the
+      # container command is untouched.
+      - name: OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED
+        value: "true"
+      - name: OTEL_LOGS_EXPORTER
+        value: otlp

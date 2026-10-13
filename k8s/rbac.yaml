@@ -1,0 +1,48 @@
+# RBAC for the collectors.
+#
+# This is a Kubernetes-only concern with no Compose equivalent: on Docker the
+# collector could not have enriched telemetry with pod metadata even if you
+# wanted it to, because there was no API to ask. Here it can, and therefore it
+# must be granted permission to.
+#
+# Three distinct needs:
+#   k8s_attributes processor  -> pods, namespaces, replicasets (to resolve the
+#                                owning Deployment name from a pod)
+#   load_balancing k8s resolver -> endpointslices (to discover gateway pods)
+#   k8s_cluster receiver      -> broad read access for cluster-state metrics
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: otel-collector, namespace: observability }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: { name: otel-collector }
+rules:
+  - apiGroups: [""]
+    resources: [pods, namespaces, nodes, nodes/stats, nodes/proxy, services, endpoints,
+                replicationcontrollers, resourcequotas, persistentvolumes,
+                persistentvolumeclaims, events]
+    verbs: [get, list, watch]
+  - apiGroups: ["apps"]
+    resources: [replicasets, deployments, daemonsets, statefulsets]
+    verbs: [get, list, watch]
+  - apiGroups: ["extensions"]
+    resources: [replicasets]
+    verbs: [get, list, watch]
+  - apiGroups: ["batch"]
+    resources: [jobs, cronjobs]
+    verbs: [get, list, watch]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: [endpointslices]
+    verbs: [get, list, watch]
+  - apiGroups: ["autoscaling"]
+    resources: [horizontalpodautoscalers]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: { name: otel-collector }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: otel-collector }
+subjects:
+  - { kind: ServiceAccount, name: otel-collector, namespace: observability }

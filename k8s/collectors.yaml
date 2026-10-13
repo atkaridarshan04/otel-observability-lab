@@ -1,0 +1,273 @@
+# =============================================================================
+# The collector tiers, as Kubernetes resources.
+#
+# Same topology as Phase 4 (agent -> gateway), but now the Operator manages
+# them: `mode: daemonset` and `mode: deployment` are the whole difference
+# between the two tiers, and the Operator generates the Deployment/DaemonSet,
+# Service, ConfigMap and pod spec from this one resource.
+#
+# Three things here have NO docker-compose equivalent:
+#   1. k8s_attributes  - enrich with pod/namespace/deployment metadata
+#   2. file_log        - read container logs off the node filesystem
+#   3. load_balancing  - trace-affinity routing, which is what makes tail
+#                        sampling correct across more than one gateway replica
+# =============================================================================
+---
+apiVersion: opentelemetry.io/v1beta1
+kind: OpenTelemetryCollector
+metadata:
+  name: otel-agent
+  namespace: observability
+spec:
+  mode: daemonset              # one per node. THIS is the agent tier.
+  image: otel/opentelemetry-collector-contrib:0.162.0
+  serviceAccount: otel-collector
+  resources:
+    requests: { memory: 128Mi, cpu: 50m }
+    limits: { memory: 384Mi }
+  env:
+    - name: K8S_NODE_NAME
+      valueFrom: { fieldRef: { fieldPath: spec.nodeName } }
+  volumes:
+    - name: varlogpods
+      hostPath: { path: /var/log/pods }
+  volumeMounts:
+    - name: varlogpods
+      mountPath: /var/log/pods
+      readOnly: true
+  config:
+    receivers:
+      otlp:
+        protocols:
+          grpc: { endpoint: 0.0.0.0:4317 }
+          http: { endpoint: 0.0.0.0:4318 }
+
+      # Reads container stdout straight off the node filesystem. This is how
+      # logs are collected in Kubernetes - there is no "docker log driver" to
+      # lean on. The `container` operator parses the CRI log format and
+      # recovers the pod/namespace/container names from the file PATH.
+      file_log:
+        include: [/var/log/pods/*/*/*.log]
+        exclude: [/var/log/pods/observability_*/**/*.log]   # don't ingest our own logs
+        include_file_path: true
+        include_file_name: false
+        start_at: end
+        operators:
+          - type: container
+            id: container-parser
+
+    processors:
+      memory_limiter:
+        check_interval: 1s
+        limit_percentage: 75
+        spike_limit_percentage: 20
+
+      # The single biggest Kubernetes-specific win. Every span, metric and log
+      # gets tagged with the pod, namespace, node and owning Deployment it came
+      # from - which is what makes "which deployment regressed?" answerable.
+      #
+      # `node_from_env_var` restricts each agent to pods on ITS OWN node, so
+      # every agent watches a slice of the API rather than all of it. On a large
+      # cluster, forgetting this is how you take down the API server.
+      k8s_attributes:
+        auth_type: serviceAccount
+        passthrough: false
+        filter:
+          node_from_env_var: K8S_NODE_NAME
+        extract:
+          metadata:
+            - k8s.namespace.name
+            - k8s.pod.name
+            - k8s.pod.uid
+            - k8s.node.name
+            - k8s.deployment.name
+            - k8s.replicaset.name
+            - k8s.container.name
+          labels:
+            - { tag_name: app, key: app, from: pod }
+        pod_association:
+          - sources: [{ from: resource_attribute, name: k8s.pod.ip }]
+          - sources: [{ from: resource_attribute, name: k8s.pod.uid }]
+          - sources: [{ from: connection }]
+
+      batch:
+        timeout: 1s
+        send_batch_size: 512
+
+    exporters:
+      # ======================================================================
+      # THE SCALED TAIL-SAMPLING FIX.
+      #
+      # The gateway has 2 replicas. A plain OTLP exporter would round-robin
+      # spans across them, so each gateway would see FRAGMENTS of every trace -
+      # and a tail sampler that cannot see a whole trace makes garbage
+      # decisions, silently.
+      #
+      # routing_key: traceID consistently hashes every span of a trace to the
+      # same gateway pod. The k8s resolver watches EndpointSlices, so the
+      # backend set updates automatically as gateway pods come and go.
+      #
+      # This is the single most important Kubernetes-specific collector detail,
+      # and omitting it does not produce an error - just wrong data.
+      # ======================================================================
+      load_balancing:
+        routing_key: traceID
+        protocol:
+          otlp:
+            tls: { insecure: true }
+            timeout: 5s
+        resolver:
+          k8s:
+            service: otel-gateway-collector.observability
+
+      # Metrics and logs have no whole-trace requirement, so they take the
+      # ordinary path.
+      otlp_grpc/gateway:
+        endpoint: otel-gateway-collector.observability.svc.cluster.local:4317
+        tls: { insecure: true }
+        sending_queue: { enabled: true, queue_size: 1000 }
+        retry_on_failure: { enabled: true }
+
+    service:
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, k8s_attributes, batch]
+          exporters: [load_balancing]
+        metrics:
+          receivers: [otlp]
+          processors: [memory_limiter, k8s_attributes, batch]
+          exporters: [otlp_grpc/gateway]
+        logs:
+          receivers: [otlp, file_log]
+          processors: [memory_limiter, k8s_attributes, batch]
+          exporters: [otlp_grpc/gateway]
+      telemetry:
+        logs: { level: warn }
+---
+apiVersion: opentelemetry.io/v1beta1
+kind: OpenTelemetryCollector
+metadata:
+  name: otel-gateway
+  namespace: observability
+spec:
+  mode: deployment             # scaled, not per-node. THIS is the gateway tier.
+  replicas: 2
+  image: otel/opentelemetry-collector-contrib:0.162.0
+  serviceAccount: otel-collector
+  resources:
+    requests: { memory: 256Mi, cpu: 100m }
+    limits: { memory: 512Mi }
+  config:
+    receivers:
+      otlp:
+        protocols:
+          grpc: { endpoint: 0.0.0.0:4317 }
+          http: { endpoint: 0.0.0.0:4318 }
+
+    processors:
+      memory_limiter:
+        check_interval: 1s
+        limit_percentage: 80
+        spike_limit_percentage: 25
+
+      resource/gateway:
+        attributes:
+          - { key: otel.pipeline.tier, value: gateway, action: upsert }
+          - { key: k8s.cluster.name, value: otel-lab, action: upsert }
+
+      filter/noise:
+        error_mode: ignore
+        traces:
+          span:
+            - 'IsMatch(span.name, ".* http (send|receive)$")'
+            - 'span.attributes["http.target"] == "/health"'
+
+      transform/scrub:
+        error_mode: ignore
+        trace_statements:
+          - set(span.attributes["customer.email"], "[redacted]") where span.attributes["customer.email"] != nil
+        log_statements:
+          - set(log.attributes["customer.email"], "[redacted]") where log.attributes["customer.email"] != nil
+
+      # Correct here ONLY because the agent routes by traceID. Without that,
+      # each replica would sample on partial traces.
+      tail_sampling:
+        decision_wait: 5s
+        num_traces: 20000
+        policies:
+          - name: keep-all-errors
+            type: status_code
+            status_code: { status_codes: [ERROR] }
+          - name: keep-slow
+            type: latency
+            latency: { threshold_ms: 300 }
+          - name: baseline
+            type: probabilistic
+            probabilistic: { sampling_percentage: 20 }
+
+      batch:
+        timeout: 2s
+        send_batch_size: 1024
+
+    connectors:
+      span_metrics:
+        histogram:
+          explicit:
+            buckets: [5ms, 10ms, 25ms, 50ms, 100ms, 250ms, 500ms, 1s, 2s, 5s]
+        dimensions:
+          - { name: http.method }
+          - { name: http.status_code }
+          - { name: k8s.deployment.name }
+        exemplars: { enabled: true }
+        metrics_flush_interval: 15s
+        namespace: spanmetrics
+
+    exporters:
+      # The backends live OUTSIDE the cluster (the Phase 0-6 compose stack).
+      # That is deliberate and realistic: most organisations run workloads in
+      # Kubernetes and send telemetry to a managed or separately-operated
+      # backend. The collector makes the boundary a config detail.
+      otlp_grpc/tempo:
+        endpoint: tempo-external.observability.svc.cluster.local:4317
+        tls: { insecure: true }
+        sending_queue: { enabled: true, queue_size: 2000 }
+        retry_on_failure: { enabled: true }
+
+      otlp_http/loki:
+        endpoint: http://loki-external.observability.svc.cluster.local:3100/otlp
+        tls: { insecure: true }
+        sending_queue: { enabled: true, queue_size: 2000 }
+        retry_on_failure: { enabled: true }
+
+      # Prometheus cannot scrape into a kind cluster, so the direction flips:
+      # the gateway PUSHES. Same trade-off you face at any network boundary.
+      prometheus_remote_write:
+        endpoint: http://prometheus-external.observability.svc.cluster.local:9090/api/v1/write
+        target_info: { enabled: true }
+        resource_to_telemetry_conversion: { enabled: false }
+
+    service:
+      pipelines:
+        traces/store:
+          receivers: [otlp]
+          processors: [memory_limiter, resource/gateway, filter/noise, transform/scrub, tail_sampling, batch]
+          exporters: [otlp_grpc/tempo]
+        traces/metrics:
+          receivers: [otlp]
+          processors: [memory_limiter, filter/noise]
+          exporters: [span_metrics]
+        metrics/spanmetrics:
+          receivers: [span_metrics]
+          processors: [batch]
+          exporters: [prometheus_remote_write]
+        metrics:
+          receivers: [otlp]
+          processors: [memory_limiter, resource/gateway, batch]
+          exporters: [prometheus_remote_write]
+        logs:
+          receivers: [otlp]
+          processors: [memory_limiter, resource/gateway, transform/scrub, batch]
+          exporters: [otlp_http/loki]
+      telemetry:
+        logs: { level: warn }

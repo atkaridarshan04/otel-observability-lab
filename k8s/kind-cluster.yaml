@@ -1,0 +1,20 @@
+# A two-node cluster: one control plane, one worker.
+#
+# Two nodes rather than one on purpose. The agent collector is a DaemonSet, and
+# with a single node you cannot tell a DaemonSet from a Deployment - which is
+# the whole point of the tier split.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: otel-lab
+nodes:
+  - role: control-plane
+    kubeadmConfigPatches:
+      - |
+        kind: InitConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "ingress-ready=true"
+    extraPortMappings:
+      - containerPort: 30300   # Grafana-in-cluster, if you ever add one
+        hostPort: 30300
+  - role: worker
