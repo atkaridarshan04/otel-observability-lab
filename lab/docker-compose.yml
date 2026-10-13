@@ -139,7 +139,8 @@ services:
       - ./tempo/tempo.yaml:/etc/tempo.yaml:ro
       - tempo-data:/var/tempo
     ports:
-      - "3200:3200"   # Tempo HTTP API (query it directly with curl)
+      - "3200:3200"    # Tempo HTTP API (query it directly with curl)
+      - "14317:4317"   # Tempo OTLP, published for the Phase 7 kind cluster
     restart: unless-stopped
 
   loki:
@@ -162,6 +163,10 @@ services:
       # Without it exemplars are silently discarded on ingest and the
       # metric-to-trace jump just never appears in Grafana.
       - --enable-feature=exemplar-storage
+      # Lets the Phase 7 Kubernetes gateway push metrics in rather than being
+      # scraped. Prometheus cannot reach pods inside kind, so the direction
+      # flips - which is exactly the choice you face with any network boundary.
+      - --web.enable-remote-write-receiver
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./prometheus/rules:/etc/prometheus/rules:ro

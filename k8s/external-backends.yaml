@@ -1,0 +1,59 @@
+# =============================================================================
+# The Phase 0-6 backends live OUTSIDE this cluster, on the Docker host.
+#
+# Rather than hard-coding an IP into every collector config, they are exposed
+# as ordinary Kubernetes Services with no selector and manually-defined
+# Endpoints. Collectors then use normal cluster DNS, and the fact that these
+# are external becomes one line of configuration in one file.
+#
+# This is the standard pattern for any external dependency - a managed
+# database, a vendor's OTLP endpoint, a service in another cluster.
+#
+# WHY NOT host.docker.internal:
+#   Inside kind, that name resolves to an IPv6 address ONLY. curl quietly falls
+#   back to IPv4 and appears to work; gRPC picks IPv6 and fails with "network
+#   is unreachable". A connectivity test that passes under curl and fails under
+#   gRPC is a genuinely confusing hour - test with the protocol you will use.
+#
+# The address below is the kind network's IPv4 gateway. Re-derive it with:
+#   docker network inspect kind -f '{{range .IPAM.Config}}{{.Gateway}} {{end}}'
+# =============================================================================
+---
+apiVersion: v1
+kind: Service
+metadata: { name: tempo-external, namespace: observability }
+spec:
+  ports: [{ name: otlp-grpc, port: 4317, targetPort: 14317 }]
+---
+apiVersion: v1
+kind: Endpoints
+metadata: { name: tempo-external, namespace: observability }
+subsets:
+  - addresses: [{ ip: "172.19.0.1" }]
+    ports: [{ name: otlp-grpc, port: 14317 }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: loki-external, namespace: observability }
+spec:
+  ports: [{ name: http, port: 3100, targetPort: 3100 }]
+---
+apiVersion: v1
+kind: Endpoints
+metadata: { name: loki-external, namespace: observability }
+subsets:
+  - addresses: [{ ip: "172.19.0.1" }]
+    ports: [{ name: http, port: 3100 }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: prometheus-external, namespace: observability }
+spec:
+  ports: [{ name: http, port: 9090, targetPort: 9090 }]
+---
+apiVersion: v1
+kind: Endpoints
+metadata: { name: prometheus-external, namespace: observability }
+subsets:
+  - addresses: [{ ip: "172.19.0.1" }]
+    ports: [{ name: http, port: 9090 }]
