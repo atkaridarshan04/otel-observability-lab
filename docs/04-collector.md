@@ -2,7 +2,7 @@
 
 No new backend this phase. Instead the single collector becomes **two tiers**, and everything expensive moves into the second one.
 
-```
+```text
 apps ──OTLP──▶ otel-agent ──OTLP──▶ otel-gateway ──▶ tempo / prometheus / loki
                (per host)           (scaled)
 ```
@@ -87,7 +87,7 @@ Two things to internalise.
 
 Result after the fix, measured on a fresh window:
 
-```
+```text
 spans named "... http send"      -> 0 traces
 spans named "... http receive"   -> 0 traces
 real spans (control)             -> 50 traces
@@ -112,7 +112,7 @@ transform/scrub:
 
 Verified:
 
-```
+```text
 customer.email == "[redacted]"          -> 50 traces
 raw email leaked through                -> 0 traces
 central enrichment applied              -> 50 traces
@@ -149,7 +149,7 @@ tail_sampling:
 
 Healthy system:
 
-```
+```text
 gateway received : 105.6 spans/sec
 sent to Tempo    :  16.3 spans/sec
 kept             : 15.4%     storage saved: 84.6%
@@ -157,7 +157,7 @@ kept             : 15.4%     storage saved: 84.6%
 
 Then we set `PAYMENTS_FAILURE_RATE=0.30` and measured over 120 seconds:
 
-```
+```text
                       produced   in Tempo   retained
 503 (errors)                92         97       ~100%
 200 (successes)            461        100         22%

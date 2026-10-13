@@ -2,7 +2,7 @@
 
 The same application, the same images, the same two collector tiers — now on a real cluster. The backends stay on the Docker host, which is also how most organisations run it: workloads in Kubernetes, telemetry to a managed or separately-operated backend.
 
-```
+```text
 kind cluster "otel-lab"                           Docker host
 ┌──────────────────────────────────────┐         ┌──────────────────┐
 │ ns: shop                             │         │  Tempo  :14317   │
@@ -54,7 +54,7 @@ annotations:
 
 The Operator's mutating webhook rewrites the pod at admission. Verified on a running pod:
 
-```
+```text
 init containers injected:
   opentelemetry-auto-instrumentation-python
 
@@ -94,7 +94,7 @@ The `Instrumentation` resource must exist **before** annotated pods start. A pod
 
 Every span, metric and log now carries where it came from:
 
-```
+```text
   k8s.cluster.name     = otel-lab
   k8s.namespace.name   = shop
   k8s.deployment.name  = orders
@@ -134,7 +134,7 @@ Accepted `routing_key` values: `service`, `traceID`, `resource`, `metric`, `stre
 
 **How we verified it works:** 23 of 25 sampled traces span all five services, across four different pods.
 
-```
+```text
     +   0.0ms  loadgen   POST                71.5ms   pod=loadgen-6cb5dd796f-45gms
     +   0.7ms  gateway   POST /checkout      70.6ms   pod=gateway-5468499ffb-ksh5q
     +   1.8ms  orders    POST /orders        68.7ms   pod=orders-86959dc589-prlt7
@@ -160,7 +160,7 @@ file_log:
 
 That `exclude` matters: without it the collector reads its own logs, which it then logs about, which it then reads. Verified result — full k8s metadata *and* `trace_id`, so the golden path works unchanged:
 
-```
+```text
   line: order placed
     k8s_deployment_name  = orders
     k8s_namespace_name   = shop
@@ -194,7 +194,7 @@ http_server_duration_milliseconds_count
 
 **1. OTLP ports are not interchangeable.** The Operator's Python default protocol is `http/protobuf`, and our `Instrumentation` pointed at **4317** (gRPC). Result:
 
-```
+```text
 BadStatusLine('\x00\x00\x06\x04\x00\x00\x00\x00\x00\x00\x05\x00\x00@\x00')
 ```
 
@@ -208,7 +208,7 @@ docker network inspect kind -f '{{range .IPAM.Config}}{{.Gateway}} {{end}}'
 
 **3. Your DaemonSet does not cover every node.** Two nodes, `desiredNumberScheduled: 1` — the control-plane node carries a `NoSchedule` taint, so no agent runs there and anything scheduled on it emits nothing. Production agents need tolerations.
 
-```
+```text
   otel-lab-control-plane   [map[effect:NoSchedule key:node-role.kubernetes.io/control-plane]]
   otel-lab-worker          <none>
 ```

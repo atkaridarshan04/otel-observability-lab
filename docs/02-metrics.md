@@ -38,7 +38,7 @@ We send cumulative because it passes straight into Prometheus. Choosing `delta` 
 
 Phase 1 measured the same endpoint split by `cache.hit`:
 
-```
+```text
 cache HIT      p50=2.72ms   p95=4.76ms
 cache MISS     p50=3.87ms   p95=6.05ms
 BLENDED mean = 3.36ms   (hits mean 2.67ms, misses mean 4.05ms)
@@ -62,7 +62,7 @@ avg by (job) (histogram_quantile(0.95, rate(http_server_duration_milliseconds_bu
 
 A histogram tells you p99 latency hit 2 seconds. It cannot tell you *why*. An exemplar is a pointer stored alongside a bucket, carrying the `trace_id` of one real request that landed in it:
 
-```
+```text
 http_server_duration_milliseconds_bucket{job="shop/gateway",le="100.0"} 521 \
   # {trace_id="d38781c6a2d456e3b66d1a4687820158",span_id="83639c722f2ec871"} 78.0 1.7918e+09
 ```
@@ -83,14 +83,14 @@ Then Grafana needs `exemplarTraceIdDestinations` on the Prometheus datasource to
 
 We measured it. Baseline, with `orders.*` labelled by `tier` (3 values) and `sku` (5):
 
-```
+```text
 prometheus TSDB total series: 2,264
   orders_value_bucket                 240
 ```
 
 Then we added exactly one label, `customer_id`, and drove 500 distinct customers:
 
-```
+```text
 prometheus TSDB total series: 8,598      <- 3.8x, from ONE label
   orders_value_bucket               4,896
   customer_id: 258 distinct values        <- and only half the customers had been seen
@@ -98,7 +98,7 @@ prometheus TSDB total series: 8,598      <- 3.8x, from ONE label
 
 The arithmetic, for a single histogram with 16 buckets:
 
-```
+```text
 tier x sku                              15 combos x 16 =       240 series   bounded, known at design time
 tier x sku x customer (500)          7,500 combos x 16 =   120,000 series   unbounded in practice
 tier x sku x customer x region (10) 75,000 combos x 16 = 1,200,000 series   the next "harmless" label

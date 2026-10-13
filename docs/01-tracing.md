@@ -21,7 +21,7 @@ A span is one unit of work with a start and end. Its parts:
 
 Every span records the **InstrumentationScope** that emitted it. That turns an abstract ownership question into something you can read directly off a real trace:
 
-```
+```text
   +   0.0ms  loadgen    POST                          63.48ms  [httpx]
   +   0.5ms  gateway    POST /checkout                62.78ms  [fastapi]
   +   0.9ms  gateway    POST                          61.81ms  [httpx]
@@ -95,7 +95,7 @@ One caution: semconv has churned. `http.status_code` became `http.response.statu
 
 Four services shared one trace ID via a single HTTP header:
 
-```
+```text
 traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01
              ^  trace-id                         parent span-id   ^ sampled
 ```
@@ -154,7 +154,7 @@ No error, no warning — just an empty result that looks like "no such data". Wh
 
 `inventory` records `cache.hit` on every request. Splitting the same endpoint by that one attribute:
 
-```
+```text
 cache HIT      n=40   p50=  2.72ms  p95=  4.76ms
 cache MISS     n=40   p50=  3.87ms  p95=  6.05ms
 BLENDED        n=80   p50=  3.37ms  p95=  5.78ms
@@ -170,10 +170,13 @@ One endpoint, two populations, and the blended average describes neither of them
 **The collector reads its config once, at startup.** The config is a bind mount, so editing it on disk changes nothing in the running process, and `docker compose up -d` won't recreate a container whose *compose definition* didn't change. Symptom: a new exporter silently absent. Diagnose it by asking the collector what it actually loaded:
 
 ```bash
-docker compose logs otel-collector | grep -oE '"otelcol.component.id": "[^"]+"' | sort -u
+docker compose logs otel-agent   | grep -oE '"otelcol.component.id": "[^"]+"' | sort -u
+docker compose logs otel-gateway | grep -oE '"otelcol.component.id": "[^"]+"' | sort -u
 ```
 
-If your exporter isn't in that list, it isn't running, no matter what the file says. `docker compose restart otel-collector` after every config edit.
+If your exporter isn't in that list, it isn't running, no matter what the file says. `docker compose restart otel-agent otel-gateway` after every config edit.
+
+> At this phase there was a single `otel-collector` service. Phase 4 splits it into `otel-agent` and `otel-gateway`, and the compose file in this repo is the final, split version — so the commands above name both tiers.
 
 **Verify your telemetry describes reality.** An earlier version of `inventory` did `SETEX` then `DEL` on every request, so the cache never served anything and `cache.hit` was *always* false. The traces were perfectly accurate — they faithfully reported a cache that did nothing. Telemetry tells you what the code does, not what you meant it to do. Checking `redis-cli DBSIZE` returned 0 is what actually found it.
 

@@ -28,7 +28,7 @@ This is the idea most tutorials skip, and it is the whole game.
 
 Each signal carries a **trace ID**. A metric can carry an **exemplar** — a pointer to one representative trace that landed in that histogram bucket. A log line can carry `trace_id` and `span_id`. Once all three share that key, you get the drill-down:
 
-```
+```text
 alert: checkout error budget burning fast
   -> dashboard: errors concentrated in `orders`
     -> exemplar on the p99 latency bucket: one specific slow trace
@@ -80,7 +80,7 @@ The Resource/attribute distinction matters for cost: resource attributes are ded
 
 A trace spans processes. Nothing magical connects them — it's an HTTP header, standardised by W3C:
 
-```
+```text
 traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01
              ^  ^                                ^                ^
              |  trace-id (16 bytes)              parent span-id   flags (01 = sampled)
@@ -126,7 +126,7 @@ Run the lab with `OTEL_ENABLED=false`, confirm the app works and produces nothin
 
 1. The **Resource** block, and the attributes you set via `OTEL_RESOURCE_ATTRIBUTES`.
 2. A **server span** in `orders` and the **client spans** it produced for payments and inventory.
-3. The **same trace ID** appearing in all four services.
+3. The **same trace ID** appearing in all five services.
 4. The **parent span ID** on a child span, and match it to its parent.
 5. A span whose duration you can explain from reading the application code.
 
@@ -138,7 +138,7 @@ When you can do all five from raw stdout, the UIs in later phases stop being mag
 
 Reconstructed with `tools/waterfall.py` from nothing but the collector's stdout — no Tempo, no UI, and no OpenTelemetry import anywhere in `app/`:
 
-```
+```text
 trace 9cab0b4fb3e9501bddf902dc3ba3a920   29 spans   5 services   89.8ms total
 
 loadgen  POST                                        |##############################################|    89.8ms  Client

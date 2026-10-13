@@ -8,29 +8,37 @@ The guiding principle: **nothing is introduced until a problem demands it.** No 
 
 Everything we build exists to make this five-step drill-down possible:
 
-```
-symptom alert fires           "users are seeing checkout errors"
-  -> RED dashboard            which service is responsible?
-    -> exemplar               jump from the latency histogram to one real trace
-      -> trace waterfall      which span is slow, and why?
-        -> logs by trace_id   the actual line: "pool exhausted, waited 4012ms"
+```text
+symptom alert fires            "users are seeing checkout errors"
+  └── RED dashboard            which service is responsible?
+       └── exemplar            jump from a latency bucket to one real trace
+            └── trace          which span is slow, and why?
+                 └── logs      the actual line, found by trace_id:
+                               "pool exhausted, waited 4012ms"
 ```
 
 If a piece of telemetry doesn't help you travel that path, it's cost without value. That is the filter for every decision here.
 
 ## The system under observation
 
-```
-loadgen -> gateway -> orders -+-> payments
-                              +-> inventory -> postgres
-                                            -> redis
+```text
+request path
+────────────
+loadgen ──▶ gateway ──▶ orders ──┬──▶ payments
+                                 └──▶ inventory ──┬──▶ postgres
+                                                  └──▶ redis
 
-telemetry:  apps -> otel-agent -> otel-gateway -> tempo / prometheus / loki
-                    (per host)    (scaled: tail sampling, PII scrub,
-                                   noise filter, span metrics)
+telemetry path
+──────────────
+apps ──▶ otel-agent ──▶ otel-gateway ──┬──▶ tempo        traces
+         (per host)     (scaled)       ├──▶ prometheus   metrics
+                                       └──▶ loki         logs
+
+         cheap work      tail sampling · PII scrub
+         only            noise filter · span metrics
 ```
 
-Four small Python services, about 120 lines each — small enough to read in full, with a topology rich enough to produce every trace shape you'll meet in production: a fan-out, a database, a cache, and a real failure surface.
+Four small Python services under observation — about 120 lines each, small enough to read in full, with a topology rich enough to produce every trace shape you'll meet in production: a fan-out, a database, a cache, and a real failure surface. A load generator and (from Phase 5) an alert sink keep them company.
 
 The application code contains **zero OpenTelemetry imports**. That is deliberate and it is the Phase 0 lesson.
 
@@ -56,7 +64,7 @@ cd lab
 
 # 1. Start with observability OFF. This is your "before" picture.
 docker compose up -d --build
-docker compose logs -f otel-collector     # silence. nothing is being sent.
+docker compose logs -f otel-agent        # silence. nothing is being sent.
 curl -s localhost:8080/health             # the app works fine without telemetry.
 
 # 2. Flip ONE environment variable. Change no code.
@@ -64,42 +72,42 @@ sed -i '' 's/OTEL_ENABLED=false/OTEL_ENABLED=true/' .env
 docker compose up -d --force-recreate
 
 # 3. Read the raw OTLP data model.
-docker compose logs -f otel-collector
+docker compose logs -f otel-agent
 ```
 
 Step 2 is the entire argument for auto-instrumentation: a service that emitted nothing now emits full distributed traces, metrics and logs, and not one line of `app/` changed. The switch lives in `app/run.sh` and is controlled from `lab/.env` — a DevOps lever, not a developer one.
 
 ## Layout
 
-```
-app/            the services. business code + a thin layer of business spans.
-  run.sh        the OTEL_ENABLED switch - read this file first
-  otelkit/      the internal telemetry helper a platform team would ship
-                (spans, metrics, structured trace-aware logging)
-lab/
-  .env          chaos knobs + the observability switch
-  alertmanager/ routing, grouping, inhibition
-  prometheus/
-    rules/      SLI recording rules + burn-rate alerts
-  docker-compose.yml
-  collector/    agent.yaml (per host) + gateway.yaml (scaled)
-  postgres/
-docs/           one lesson per phase
-chaos/          Phase 6 failure scenarios
-tools/
-  waterfall.py       rebuild a trace waterfall from raw collector stdout
-  golden_path.py     walk log -> trace -> logs from the terminal
-  gen_dashboards.py  generate the Grafana dashboards
-  chaos.py           induce failures and observe them end to end
-chaos/
-  scenarios.yaml     the eight failure scenarios, declaratively
-k8s/
-  kind-cluster.yaml  two-node local cluster
-  app.yaml           the app — note it has NO otel config
-  instrumentation.yaml  the Instrumentation CRD: whole-namespace SDK policy
-  collectors.yaml    agent DaemonSet + gateway Deployment
-  rbac.yaml          what the collector needs to read the k8s API
-  external-backends.yaml  reach the host's backends from inside the cluster
+Directories, plus the files that *are* the point of their directory.
+
+```bash
+.
+├── app/                      # the services — plain business code, no OTel imports
+│   ├── run.sh                # the OTEL_ENABLED switch — read this file first
+│   ├── otelkit/              # the internal telemetry helper a platform team ships
+│   └── gateway/ orders/ payments/ inventory/ loadgen/ alertsink/
+│
+├── lab/                      # the Docker Compose stack (Phases 0–6)
+│   ├── docker-compose.yml
+│   ├── .env                  # chaos knobs + the observability switch
+│   ├── collector/
+│   │   ├── agent.yaml        # agent tier — per host, cheap work only
+│   │   └── gateway.yaml      # gateway tier — tail sampling, PII scrub, span metrics
+│   ├── prometheus/rules/     # SLI recording rules + burn-rate alerts
+│   ├── alertmanager/         # routing, grouping, inhibition
+│   ├── grafana/              # provisioned datasources + generated dashboards
+│   └── tempo/ loki/ postgres/
+│
+├── k8s/                      # the Kubernetes lift (Phase 7)
+│   ├── app.yaml              # the app — note it has NO otel config
+│   ├── instrumentation.yaml  # one annotation turns telemetry on
+│   ├── collectors.yaml       # agent DaemonSet + gateway Deployment
+│   └── rbac.yaml  kind-cluster.yaml  external-backends.yaml
+│
+├── chaos/scenarios.yaml      # the eight failure scenarios, declaratively
+├── tools/                    # waterfall · golden_path · gen_dashboards · chaos
+└── docs/                     # one lesson per phase, 00 through 07
 ```
 
 ## Where to look
@@ -155,7 +163,7 @@ slo:checkout_availability:budget_remaining6h
 
 ## Dashboards
 
-Four, generated by `tools/gen_dashboards.py` rather than hand-written JSON — a dashboard clicked together in a browser exists only in one person's history.
+Five, generated by `tools/gen_dashboards.py` rather than hand-written JSON — a dashboard clicked together in a browser exists only in one person's history.
 
 | Dashboard | For |
 |---|---|
@@ -268,7 +276,8 @@ docker run --rm otel/opentelemetry-collector-contrib:0.162.0 components
 ```bash
 cd lab
 docker compose ps                          # what's running
-docker compose logs -f otel-collector      # the raw telemetry firehose
+docker compose logs -f otel-agent          # telemetry entering the pipeline
+docker compose logs -f otel-gateway        # after filtering and tail sampling
 docker compose logs -f orders              # one service's app logs
 docker compose restart payments            # apply a changed chaos knob
 docker compose down -v                     # tear down, including volumes

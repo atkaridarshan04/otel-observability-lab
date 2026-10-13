@@ -84,7 +84,7 @@ The standard tiers:
 
 We induced a 35% payment failure rate, let it page, then turned it off and watched:
 
-```
+```text
 r1: 1m=0.0%  5m=19.5%  alerts[firing=1 pending=1]
 r2: 1m=0.0%  5m=19.5%  alerts[pending=1]        <- page CLEARED here
 r3: 1m=0.0%  5m=19.5%  alerts[pending=1]
@@ -133,7 +133,7 @@ inhibit_rules:
 
 Captured from `alertsink` during the induced incident:
 
-```
+```text
 ==============================================================================
   FIRING    -> channel:pager   group={'alertname': 'LabCheckoutErrorBudgetBurnFast',
                                       'slo': 'checkout-availability'}   (1 alert(s))

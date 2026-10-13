@@ -34,7 +34,7 @@ The two most confusing rows are **cascading timeout** and **pool exhaustion**, b
 
 Every comparison below is against this:
 
-```
+```text
   checkout throughput :     4.62 req/s
   checkout error rate :     0.19 %
   checkout p50        :     75.0 ms
@@ -59,7 +59,7 @@ Every comparison below is against this:
 
 **The symptom:**
 
-```
+```text
   checkout error rate :    19.82 %
   checkout p50        :     81.9 ms      <- barely moved
   checkout p99        :   7348.7 ms      <- catastrophic
@@ -84,7 +84,7 @@ Note inventory reports **0% errors**. It is not failing. It is answering, slowly
 
 **The trace — and the part no dashboard shows:**
 
-```
+```text
 trace 143037859262b94a792ae2a0a6899f16
 
   inventory POST /reserve    start=+     23.8ms  end=+  28289.7ms  dur= 28265.9ms  [fastapi]
@@ -104,7 +104,7 @@ The `UPDATE` itself took **1.5ms**. Postgres was idle for the whole 28 seconds. 
 
 **A second lesson from the same trace:**
 
-```
+```text
   >>> orders' client span gave up after 5.0s (its timeout)
   >>> inventory kept working for 28.3s on a request nobody was waiting for
 ```
@@ -113,7 +113,7 @@ The `UPDATE` itself took **1.5ms**. Postgres was idle for the whole 28 seconds. 
 
 **The log line:**
 
-```
+```text
   orders  ERROR  upstream timed out
           {'dependency': 'inventory', 'order_id': '42895413-...'}
           trace_id=15f297476331d2597fe3878d219044e3
@@ -125,7 +125,7 @@ The `UPDATE` itself took **1.5ms**. Postgres was idle for the whole 28 seconds. 
 
 **What broke:** payments slowed to 6s, past orders' 5s client timeout.
 
-```
+```text
   service               req/s    5xx%    p50 ms    p99 ms
   shop/gateway           4.87   98.07      88.8    7445.5
   shop/orders            4.80   98.28      85.0    7444.9
@@ -136,7 +136,7 @@ The `UPDATE` itself took **1.5ms**. Postgres was idle for the whole 28 seconds. 
 
 A direct request confirms the mechanism:
 
-```
+```text
 $ time curl localhost:8080/checkout ...
 http=502
 5.032 total        <- orders' 5s timeout, not payments' 6s response
@@ -154,7 +154,7 @@ http=502
 
 Measured over a controlled window, counting `POST /charge` spans per request:
 
-```
+```text
   attempts-per-request distribution: {0: 5, 1: 16, 2: 11, 3: 5, 4: 3}
   mean attempts per request        : 1.62      (1.00 = no retries)
 ```
@@ -175,7 +175,7 @@ Up to 4 attempts appear in a single request — one initial plus three retries, 
 
 **What broke:** orders leaking 400KB per request against a 256MB container limit.
 
-```
+```text
   round  1: mem= 63.07MiB / 256MiB  restarts=0
   round  4: mem=105.8MiB  / 256MiB  restarts=0
   round  8: mem=186.4MiB  / 256MiB  restarts=0
@@ -209,7 +209,7 @@ This is the failure mode a pure error-rate alert **misses entirely** — which i
 
 **The tell:** failures are *fast*, not slow. The log line is distinctive:
 
-```
+```text
   orders  ERROR  upstream call failed
           {'dependency': 'payments', 'error': 'All connection attempts failed'}
 ```
