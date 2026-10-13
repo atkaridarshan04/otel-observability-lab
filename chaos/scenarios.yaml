@@ -1,0 +1,159 @@
+# =============================================================================
+# Failure scenarios.
+#
+# Every scenario is a change to environment variables or container state - no
+# code edits, no rebuilds. That is deliberate: in production you cannot patch
+# the application to reproduce an incident, so the lab should not let you
+# either.
+#
+#   python3 tools/chaos.py list
+#   python3 tools/chaos.py start <name>
+#   python3 tools/chaos.py observe
+#   python3 tools/chaos.py stop
+# =============================================================================
+
+# Restored by `stop`. These are the healthy-system values.
+defaults:
+  PAYMENTS_LATENCY_MS: "40"
+  PAYMENTS_LATENCY_JITTER_MS: "30"
+  PAYMENTS_FAILURE_RATE: "0.0"
+  PAYMENTS_DECLINE_RATE: "0.02"
+  INVENTORY_SLOW_QUERY_MS: "0"
+  INVENTORY_POOL_SIZE: "10"
+  INVENTORY_CACHE_TTL_S: "10"
+  ORDERS_POOL_SIZE: "10"
+  ORDERS_RETRY_ATTEMPTS: "0"
+  ORDERS_RETRY_BACKOFF_MS: "0"
+  ORDERS_LEAK_KB: "0"
+  ORDERS_UPSTREAM_TIMEOUT_S: "5"
+  GATEWAY_UPSTREAM_TIMEOUT_S: "10"
+  ORDERS_CARDINALITY_DEMO: "false"
+  LOADGEN_RPS: "5"
+
+scenarios:
+  - name: downstream-latency
+    title: A dependency gets slow (but keeps working)
+    story: >-
+      The payment provider starts taking 700-1000ms instead of 40-70ms. Nothing
+      errors. Every health check passes. This is the failure mode that a
+      pure error-rate alert misses entirely.
+    env:
+      PAYMENTS_LATENCY_MS: "700"
+      PAYMENTS_LATENCY_JITTER_MS: "300"
+    restart: [payments]
+    expect: [LabCheckoutLatencyBudgetBurnFast]
+    look_for: >-
+      Latency SLO burns while error rate stays flat at zero. In the trace, the
+      payments span dominates and orders' total duration tracks it, because the
+      fan-out is only as fast as its slower branch.
+
+  - name: cascading-timeout
+    title: Slow dependency becomes someone else's outage
+    story: >-
+      Payments slows past orders' 5s client timeout. A latency problem in one
+      service turns into 5xx errors in two others. The service that is actually
+      broken reports no errors at all - it is answering fine, just late.
+    env:
+      PAYMENTS_LATENCY_MS: "6000"
+      PAYMENTS_LATENCY_JITTER_MS: "500"
+    restart: [payments]
+    expect: [LabCheckoutErrorBudgetBurnFast, LabCheckoutLatencyBudgetBurnFast]
+    look_for: >-
+      gateway 504/502 and orders 504, while payments' own metrics show 200s
+      throughout. Errors appear UPSTREAM of the cause. This is why you look for
+      the earliest rise, not the largest.
+
+  - name: dependency-failing
+    title: A dependency starts returning 5xx
+    story: >-
+      The payment processor returns 503 for 40% of requests. The most ordinary
+      incident there is, and the baseline every other scenario is compared to.
+    env:
+      PAYMENTS_FAILURE_RATE: "0.4"
+    restart: [payments]
+    expect: [LabCheckoutErrorBudgetBurnFast]
+    look_for: >-
+      Error budget burn, and tail sampling's keep-rate rising because every
+      error trace is retained.
+
+  - name: dependency-down
+    title: A dependency disappears entirely
+    story: >-
+      The payments container is stopped. Not slow, not erroring - absent.
+      Connection refused is a different log line and a different span shape
+      from an HTTP error, and it is worth knowing both on sight.
+    stop_services: [payments]
+    expect: [LabCheckoutErrorBudgetBurnFast]
+    look_for: >-
+      "All connection attempts failed" in orders' logs, and a client span that
+      ends in an error with no corresponding server span anywhere - because the
+      server never saw the request.
+
+  - name: slow-query
+    title: A database query degrades
+    story: >-
+      The inventory stock lookup starts taking 600ms, and the cache TTL is
+      short enough that misses are frequent. The classic bimodal latency
+      distribution: fast on a hit, slow on a miss, and an average that
+      describes neither.
+    env:
+      INVENTORY_SLOW_QUERY_MS: "600"
+      INVENTORY_CACHE_TTL_S: "2"
+    restart: [inventory]
+    expect: [LabCheckoutLatencyBudgetBurnFast]
+    look_for: >-
+      Split the inventory latency by cache.hit in Tempo and you get two clean
+      populations. p50 may look acceptable while p99 is terrible.
+
+  - name: pool-exhaustion
+    title: Connection pool exhaustion
+    story: >-
+      Inventory's Postgres pool is cut to one connection while queries are slow
+      and traffic is raised. Requests spend their time QUEUEING for a
+      connection rather than doing work - so the database looks idle while the
+      service is dying.
+    env:
+      INVENTORY_POOL_SIZE: "1"
+      INVENTORY_SLOW_QUERY_MS: "300"
+      INVENTORY_CACHE_TTL_S: "1"
+      LOADGEN_RPS: "18"
+    restart: [inventory, loadgen]
+    expect: [LabCheckoutLatencyBudgetBurnFast, LabCheckoutErrorBudgetBurnFast]
+    look_for: >-
+      In-flight requests climbing while throughput stays flat - the signature of
+      saturation. In the trace, the gap between the inventory server span
+      starting and its first SELECT is the queue wait, and it is invisible in
+      any database metric.
+
+  - name: retry-storm
+    title: Retries amplify an outage
+    story: >-
+      Payments fails 40% of the time and orders is configured to retry three
+      times. Retries look free until the thing you are retrying is the thing
+      already struggling, at which point the mitigation becomes the outage.
+    env:
+      PAYMENTS_FAILURE_RATE: "0.4"
+      ORDERS_RETRY_ATTEMPTS: "3"
+      ORDERS_RETRY_BACKOFF_MS: "0"
+    restart: [orders, payments]
+    expect: [LabCheckoutErrorBudgetBurnFast]
+    look_for: >-
+      Request rate INTO payments far exceeds the rate into the gateway. The
+      trace shows repeated identical POST child spans. Compare payments' inbound
+      rate here against dependency-failing, where it matches the gateway's.
+
+  - name: memory-leak
+    title: A memory leak ends in an OOMKill
+    story: >-
+      Orders leaks 400KB per request against a 256MB container limit. The
+      service does not degrade gracefully; it is killed and restarted, losing
+      every in-flight request.
+    env:
+      ORDERS_LEAK_KB: "400"
+      LOADGEN_RPS: "12"
+    restart: [orders, loadgen]
+    expect: [LabCheckoutErrorBudgetBurnFast]
+    look_for: >-
+      Container memory climbing linearly with request count, then a restart.
+      The error signature is connection-refused bursts, not 5xx - the process
+      vanished mid-request rather than returning anything.
