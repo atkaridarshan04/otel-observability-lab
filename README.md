@@ -55,6 +55,46 @@ The application code contains **zero OpenTelemetry imports**. That is deliberate
 | 6 | Break it on purpose | — | [06-field-guide.md](docs/06-field-guide.md) **done** |
 | 7 | Lift to Kubernetes | kind + OTel Operator | [07-kubernetes.md](docs/07-kubernetes.md) **done** |
 
+## How to work through this
+
+`main` is the finished Phase 7 state. If you run it while reading Phase 0 you lose the lesson — Phase 0's whole point is reading raw OTLP *before* any UI exists.
+
+So each phase is tagged, and **every tag is a self-consistent snapshot**: the code, the compose file and the docs are all from that moment. At `phase-0` there is genuinely no Tempo, and `docs/` contains only `00-mental-model.md`.
+
+```bash
+./tools/phase.sh 0        # tear down, check out phase-0, build, start
+                          # then read docs/00-mental-model.md and do its exercises
+./tools/phase.sh 1        # when you're ready to move on
+...
+./tools/phase.sh main     # back to the finished state
+./tools/phase.sh status   # where am I, what's running
+```
+
+The script tears down volumes between phases on purpose: stale Tempo or Prometheus data from a later phase would otherwise appear as history that could not exist yet.
+
+**What each phase adds:**
+
+```text
+phase-0   app + collector → stdout            8 services, no UI at all
+phase-1   + tempo, grafana                    traces
+phase-2   + prometheus                        metrics
+phase-3   + loki                              logs — triangle closed
+phase-4   collector → agent + gateway         tail sampling, OTTL, span metrics
+phase-5   + alertmanager, alertsink           SLOs and burn-rate alerts
+phase-6   (no new services)                   eight failure scenarios
+phase-7   + kind cluster                      the Kubernetes lift
+```
+
+**Seeing exactly what a phase changed** is often the fastest way to understand it:
+
+```bash
+git diff phase-2 phase-3 -- lab/ app/     # what did adding logs actually touch?
+git diff phase-3 phase-4 -- lab/collector/
+git log --oneline phase-0..phase-1
+```
+
+You'll be on a detached HEAD while on a tag — fine for reading and running. To experiment, branch: `git switch -c my-phase-3`.
+
 ## Quick start
 
 Requires Docker Desktop to be running.
@@ -106,7 +146,7 @@ Directories, plus the files that *are* the point of their directory.
 │   └── rbac.yaml  kind-cluster.yaml  external-backends.yaml
 │
 ├── chaos/scenarios.yaml      # the eight failure scenarios, declaratively
-├── tools/                    # waterfall · golden_path · gen_dashboards · chaos
+├── tools/                    # phase.sh · waterfall · golden_path · gen_dashboards · chaos
 └── docs/                     # one lesson per phase, 00 through 07
 ```
 
