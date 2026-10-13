@@ -209,6 +209,7 @@ services:
       <<: *app-env
       OTEL_SERVICE_NAME: gateway
       ORDERS_URL: http://orders:8000
+      GATEWAY_UPSTREAM_TIMEOUT_S: ${GATEWAY_UPSTREAM_TIMEOUT_S:-10}
     ports: ["8080:8000"]
 
   orders:
@@ -222,6 +223,13 @@ services:
       DATABASE_URL: postgresql://otel:otel@postgres:5432/otel
       ORDERS_POOL_SIZE: ${ORDERS_POOL_SIZE:-10}
       ORDERS_CARDINALITY_DEMO: ${ORDERS_CARDINALITY_DEMO:-false}
+      ORDERS_RETRY_ATTEMPTS: ${ORDERS_RETRY_ATTEMPTS:-0}
+      ORDERS_RETRY_BACKOFF_MS: ${ORDERS_RETRY_BACKOFF_MS:-0}
+      ORDERS_LEAK_KB: ${ORDERS_LEAK_KB:-0}
+      ORDERS_UPSTREAM_TIMEOUT_S: ${ORDERS_UPSTREAM_TIMEOUT_S:-5}
+    # A hard memory ceiling so the leak scenario ends in a real OOMKill rather
+    # than slowly eating the host. 256MB is comfortable for normal operation.
+    mem_limit: 256m
     depends_on:
       postgres: { condition: service_healthy }
       otel-agent: { condition: service_started }
@@ -233,6 +241,7 @@ services:
       <<: *app-env
       OTEL_SERVICE_NAME: payments
       PAYMENTS_LATENCY_MS: ${PAYMENTS_LATENCY_MS:-40}
+      PAYMENTS_LATENCY_JITTER_MS: ${PAYMENTS_LATENCY_JITTER_MS:-30}
       PAYMENTS_FAILURE_RATE: ${PAYMENTS_FAILURE_RATE:-0.0}
       PAYMENTS_DECLINE_RATE: ${PAYMENTS_DECLINE_RATE:-0.02}
 
@@ -246,6 +255,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       INVENTORY_POOL_SIZE: ${INVENTORY_POOL_SIZE:-10}
       INVENTORY_SLOW_QUERY_MS: ${INVENTORY_SLOW_QUERY_MS:-0}
+      INVENTORY_CACHE_TTL_S: ${INVENTORY_CACHE_TTL_S:-10}
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }

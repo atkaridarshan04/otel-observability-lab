@@ -29,6 +29,19 @@ UPSTREAM_TIMEOUT_S = float(os.getenv("ORDERS_UPSTREAM_TIMEOUT_S", "5"))
 # Phase 2 turns this on deliberately to watch the series count explode.
 CARDINALITY_DEMO = os.getenv("ORDERS_CARDINALITY_DEMO", "false").lower() == "true"
 
+# --- Phase 6 chaos knobs ----------------------------------------------------
+# Retries look free until the dependency you are retrying is the thing that is
+# already struggling. Then each client request becomes N requests against it,
+# and the "fix" becomes the outage. Default 0 = no retries.
+RETRY_ATTEMPTS = int(os.getenv("ORDERS_RETRY_ATTEMPTS", "0"))
+RETRY_BACKOFF_MS = int(os.getenv("ORDERS_RETRY_BACKOFF_MS", "0"))
+
+# Leaks this many KB per request into a module-level list. With a container
+# memory limit set, this ends in an OOMKill - visible as a process that simply
+# vanishes mid-request, which is a very different signature from an error.
+LEAK_KB = int(os.getenv("ORDERS_LEAK_KB", "0"))
+_LEAK: list[bytes] = []
+
 PRICE = {
     "SKU-TELESCOPE": 899.00,
     "SKU-TRIPOD": 149.50,
@@ -102,6 +115,34 @@ async def health() -> dict:
     return {"status": "ok"}
 
 
+async def call_with_retries(http, name: str, url: str, payload: dict):
+    """POST with optional retries.
+
+    Each attempt gets its own span from httpx auto-instrumentation, so a retry
+    storm is visible in the trace waterfall as repeated identical child spans -
+    which is usually how people discover they have one.
+    """
+    last = None
+    for attempt in range(RETRY_ATTEMPTS + 1):
+        try:
+            resp = await http.post(url, json=payload)
+            if resp.status_code < 500 or attempt == RETRY_ATTEMPTS:
+                if attempt:
+                    add_event("upstream.retry_succeeded", dependency=name, attempts=attempt + 1)
+                return resp
+            add_event("upstream.retry", dependency=name, attempt=attempt + 1,
+                      status=resp.status_code)
+        except Exception as exc:
+            last = exc
+            if attempt == RETRY_ATTEMPTS:
+                return exc
+            add_event("upstream.retry", dependency=name, attempt=attempt + 1,
+                      error=type(exc).__name__)
+        if RETRY_BACKOFF_MS:
+            await asyncio.sleep(RETRY_BACKOFF_MS / 1000)
+    return last
+
+
 @traced("fraud.check", component="risk")
 async def fraud_check(customer_id: str, amount: float, tier: str) -> float:
     """Pure business logic. No network call, no database.
@@ -124,6 +165,9 @@ async def create_order(req: OrderRequest) -> dict:
     order_id = str(uuid.uuid4())
     amount = round(req.qty * PRICE.get(req.sku, 19.99), 2)
     http = state["http"]
+    if LEAK_KB:
+        _LEAK.append(b"\0" * (LEAK_KB * 1024))
+
     labels = order_labels(req)
     orders_in_flight.add(1, labels)
     try:
@@ -169,11 +213,12 @@ async def _create_order(req: OrderRequest, order_id: str, amount: float, http, l
     # auto-instrumentation is on - that header is what stitches four services
     # into one trace.
     charge, reserve = await asyncio.gather(
-        http.post(f"{PAYMENTS_URL}/charge", json={
+        call_with_retries(http, "payments", f"{PAYMENTS_URL}/charge", {
             "order_id": order_id, "customer_id": req.customer_id,
             "amount_usd": amount, "tier": req.tier,
         }),
-        http.post(f"{INVENTORY_URL}/reserve", json={"sku": req.sku, "qty": req.qty}),
+        call_with_retries(http, "inventory", f"{INVENTORY_URL}/reserve",
+                          {"sku": req.sku, "qty": req.qty}),
         return_exceptions=True,
     )
 

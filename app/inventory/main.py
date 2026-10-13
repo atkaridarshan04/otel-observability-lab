@@ -77,9 +77,13 @@ async def reserve(req: ReserveRequest) -> dict:
         stock = int(cached)
     else:
         add_event("cache.miss", key=cache_key)
-        if SLOW_QUERY_MS:
-            await asyncio.sleep(SLOW_QUERY_MS / 1000)  # chaos: simulate a bad query plan
         async with state["db"].acquire() as conn:
+            # The sleep is INSIDE the pool checkout on purpose. A slow query
+            # does not politely release its connection while it runs - it holds
+            # one for its whole duration, which is exactly why a slow query and
+            # a small pool combine into an outage that neither causes alone.
+            if SLOW_QUERY_MS:
+                await asyncio.sleep(SLOW_QUERY_MS / 1000)
             row = await conn.fetchrow("SELECT stock FROM inventory WHERE sku = $1", req.sku)
         if row is None:
             raise HTTPException(status_code=404, detail=f"unknown sku {req.sku}")
@@ -93,6 +97,11 @@ async def reserve(req: ReserveRequest) -> dict:
         raise HTTPException(status_code=409, detail="out of stock")
 
     async with state["db"].acquire() as conn:
+        # Same again on the write path, which EVERY request takes regardless of
+        # whether the cache hit. This is what makes pool contention universal
+        # rather than limited to cache misses.
+        if SLOW_QUERY_MS:
+            await asyncio.sleep(SLOW_QUERY_MS / 1000)
         await conn.execute("UPDATE inventory SET stock = stock - $1 WHERE sku = $2", req.qty, req.sku)
 
     # Write-THROUGH, not invalidate. An earlier version of this deleted the key
