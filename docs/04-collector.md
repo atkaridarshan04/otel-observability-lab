@@ -2,9 +2,13 @@
 
 No new backend this phase. Instead the single collector becomes **two tiers**, and everything expensive moves into the second one.
 
-```text
-apps ──OTLP──▶ otel-agent ──OTLP──▶ otel-gateway ──▶ tempo / prometheus / loki
-               (per host)           (scaled)
+```mermaid
+flowchart LR
+    apps(["apps"]) -->|OTLP| agent["otel-agent<br/><small>per host</small>"]
+    agent -->|OTLP| gateway["otel-gateway<br/><small>scaled</small>"]
+    gateway --> tempo[(tempo)]
+    gateway --> prometheus[(prometheus)]
+    gateway --> loki[(loki)]
 ```
 
 Every hop speaks OTLP. That is what makes tiers composable at all — you can insert, remove or reorder a tier without anything upstream noticing.

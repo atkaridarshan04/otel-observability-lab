@@ -8,34 +8,40 @@ The guiding principle: **nothing is introduced until a problem demands it.** No 
 
 Everything we build exists to make this five-step drill-down possible:
 
-```text
-symptom alert fires            "users are seeing checkout errors"
-  └── RED dashboard            which service is responsible?
-       └── exemplar            jump from a latency bucket to one real trace
-            └── trace          which span is slow, and why?
-                 └── logs      the actual line, found by trace_id:
-                               "pool exhausted, waited 4012ms"
+```mermaid
+flowchart TD
+    A["Symptom alert fires<br/><i>users are seeing checkout errors</i>"]
+    B["RED dashboard<br/><i>which service is responsible?</i>"]
+    C["Exemplar<br/><i>jump from a latency bucket to one real trace</i>"]
+    D["Trace<br/><i>which span is slow, and why?</i>"]
+    E["Logs<br/><i>the actual line, found by trace_id:</i><br/>'pool exhausted, waited 4012ms'"]
+    A --> B --> C --> D --> E
 ```
 
 If a piece of telemetry doesn't help you travel that path, it's cost without value. That is the filter for every decision here.
 
 ## The system under observation
 
-```text
-request path
-────────────
-loadgen ──▶ gateway ──▶ orders ──┬──▶ payments
-                                 └──▶ inventory ──┬──▶ postgres
-                                                  └──▶ redis
+**request path**
 
-telemetry path
-──────────────
-apps ──▶ otel-agent ──▶ otel-gateway ──┬──▶ tempo        traces
-         (per host)     (scaled)       ├──▶ prometheus   metrics
-                                       └──▶ loki         logs
+```mermaid
+flowchart LR
+    loadgen --> gateway --> orders
+    orders --> payments
+    orders --> inventory
+    inventory --> postgres[(postgres)]
+    inventory --> redis[(redis)]
+```
 
-         cheap work      tail sampling · PII scrub
-         only            noise filter · span metrics
+**telemetry path**
+
+```mermaid
+flowchart LR
+    apps(["apps"]) -->|OTLP| agent["otel-agent<br/><small>per host · cheap work only</small>"]
+    agent -->|OTLP| gateway["otel-gateway<br/><small>scaled · tail sampling · PII scrub<br/>noise filter · span metrics</small>"]
+    gateway -->|traces| tempo[(tempo)]
+    gateway -->|metrics| prometheus[(prometheus)]
+    gateway -->|logs| loki[(loki)]
 ```
 
 Four small Python services under observation — about 120 lines each, small enough to read in full, with a topology rich enough to produce every trace shape you'll meet in production: a fan-out, a database, a cache, and a real failure surface. A load generator and (from Phase 5) an alert sink keep them company.

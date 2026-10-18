@@ -28,13 +28,14 @@ This is the idea most tutorials skip, and it is the whole game.
 
 Each signal carries a **trace ID**. A metric can carry an **exemplar** — a pointer to one representative trace that landed in that histogram bucket. A log line can carry `trace_id` and `span_id`. Once all three share that key, you get the drill-down:
 
-```text
-alert: checkout error budget burning fast
-  -> dashboard: errors concentrated in `orders`
-    -> exemplar on the p99 latency bucket: one specific slow trace
-      -> trace waterfall: orders -> inventory span took 4.1s
-        -> logs filtered by that trace_id:
-             ERROR inventory connection pool exhausted, waited 4012ms
+```mermaid
+flowchart TD
+    A["Alert: checkout error budget burning fast"]
+    B["Dashboard: errors concentrated in <code>orders</code>"]
+    C["Exemplar on the p99 latency bucket:<br/>one specific slow trace"]
+    D["Trace waterfall:<br/><code>orders → inventory</code> span took 4.1s"]
+    E["Logs filtered by that trace_id:<br/><code>ERROR inventory connection pool exhausted, waited 4012ms</code>"]
+    A --> B --> C --> D --> E
 ```
 
 Five clicks from "something is wrong" to the exact line of evidence. That path is what we are building. **If a piece of telemetry does not help you move along that path, it is cost without value.** Use that as your filter for every decision in this course.

@@ -2,20 +2,52 @@
 
 The same application, the same images, the same two collector tiers — now on a real cluster. The backends stay on the Docker host, which is also how most organisations run it: workloads in Kubernetes, telemetry to a managed or separately-operated backend.
 
-```text
-kind cluster "otel-lab"                           Docker host
-┌──────────────────────────────────────┐         ┌──────────────────┐
-│ ns: shop                             │         │  Tempo  :14317   │
-│   gateway x2  orders x2              │         │  Loki   :3100    │
-│   payments x2 inventory x2           │         │  Prom   :9090    │
-│   loadgen     postgres  redis        │         └──────────────────┘
-│        │ (annotation-injected SDK)             ▲
-│        ▼                                       │
-│ ns: observability                              │
-│   otel-agent    (DaemonSet)  ──load_balancing──┤
-│   otel-gateway  (Deployment x2) ───────────────┘
-└──────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph cluster["kind cluster 'otel-lab'"]
+        direction TB
+        subgraph cp["node: control-plane (NoSchedule tainted)"]
+            cpnote["nothing shop-related<br/>schedules here"]
+        end
+        subgraph worker["node: worker"]
+            direction TB
+            subgraph shop["ns: shop"]
+                instr["Instrumentation CRD<br/><small>injects SDK at pod admission</small>"]
+                workloads["gateway x2 · orders x2<br/>payments x2 · inventory x2<br/>loadgen x1 · postgres x1 · redis x1"]
+                instr -.->|annotation| workloads
+            end
+            subgraph obs["ns: observability"]
+                agent["otel-agent<br/><small>DaemonSet — worker node only, see trap 3</small>"]
+                gateway["otel-gateway<br/><small>Deployment x2 — k8s resolver watches EndpointSlices</small>"]
+                agent -->|"traces: load_balancing<br/>(routing_key: traceID)"| gateway
+                agent -->|"metrics, logs: otlp_grpc/gateway<br/>(plain, no routing)"| gateway
+            end
+            workloads -->|"OTLP :4318"| agent
+        end
+    end
+
+    subgraph dockerhost["Docker host (Phases 0–6 backends)"]
+        tempo[("tempo :14317")]
+        loki[("loki :3100")]
+        prometheus[("prometheus :9090")]
+    end
+
+    gateway -->|"traces, tail-sampled<br/>OTLP/gRPC"| tempo
+    gateway -->|"logs<br/>OTLP/HTTP"| loki
+    gateway -->|"metrics<br/>PUSH via remote_write"| prometheus
+
+    client(["external client"]) -->|"NodePort :30080"| workloads
 ```
+
+`tempo-external` / `loki-external` / `prometheus-external` above are selector-less Services with static `Endpoints` pointing at `172.19.0.1` — the kind network's IPv4 gateway, i.e. the Docker host running Phases 0–6 (**not** `host.docker.internal`, see trap 2 below). On that host:
+
+```text
+tempo      :14317   (compose maps the container's :4317 → host :14317)
+loki       :3100
+prometheus :9090    (--web.enable-remote-write-receiver)
+```
+
+The app itself is reachable from outside the cluster through `gateway`'s Service, `type: NodePort` on `:30080` — same image, same port, now fronted by Kubernetes instead of Docker Compose.
 
 ## Setup
 
